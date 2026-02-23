@@ -1,5 +1,9 @@
 #define SINGLE_COMPILE_UNIT
 
+// #define NO_PULSE
+
+//#define INCLUDE_CONTRACT_TEST_EXAMPLES
+
 // contract_def.h needs to be included first to make sure that contracts have minimal access
 #include "contract_core/contract_def.h"
 #include "contract_core/contract_exec.h"
@@ -56,6 +60,8 @@
 #include "logging/net_msg_impl.h"
 
 #include "ticking/ticking.h"
+#include "ticking/tick_storage.h"
+#include "ticking/pending_txs_pool.h"
 #include "contract_core/qpi_ticking_impl.h"
 #include "vote_counter.h"
 #include "ticking/execution_fee_report_collector.h"
@@ -69,7 +75,11 @@
 
 #include "files/files.h"
 #include "mining/mining.h"
-#include "oracles/oracle_machines.h"
+
+#include "oracle_core/oracle_engine.h"
+#include "oracle_core/net_msg_impl.h"
+#include "oracle_core/snapshot_files.h"
+#include "contract_core/qpi_oracle_impl.h"
 
 #include "contract_core/qpi_mining_impl.h"
 #include "revenue.h"
@@ -88,8 +98,11 @@
 #define SYSTEM_DATA_SAVING_PERIOD 300000ULL
 #define TICK_TRANSACTIONS_PUBLICATION_OFFSET 2 // Must be only 2
 #define MIN_MINING_SOLUTIONS_PUBLICATION_OFFSET 3 // Must be 3+
+#define ORACLE_REPLY_COMMIT_PUBLICATION_OFFSET 4
+#define ORACLE_REPLY_REVEAL_PUBLICATION_OFFSET 3
 #define TIME_ACCURACY 5000
 constexpr unsigned long long TARGET_MAINTHREAD_LOOP_DURATION = 30; // mcs, it is the target duration of the main thread loop
+constexpr unsigned int COMMON_BUFFERS_COUNT = 2;
 
 
 struct Processor : public CustomStack
@@ -128,10 +141,9 @@ static unsigned long long faultyComputorFlags[(NUMBER_OF_COMPUTORS + 63) / 64];
 static unsigned int gTickNumberOfComputors = 0, gTickTotalNumberOfComputors = 0, gFutureTickTotalNumberOfComputors = 0;
 static unsigned int nextTickTransactionsSemaphore = 0, numberOfNextTickTransactions = 0, numberOfKnownNextTickTransactions = 0;
 static unsigned short numberOfOwnComputorIndices;
-static unsigned short ownComputorIndices[sizeof(computorSeeds) / sizeof(computorSeeds[0])];
-static unsigned short ownComputorIndicesMapping[sizeof(computorSeeds) / sizeof(computorSeeds[0])];
+static unsigned short ownComputorIndices[computorSeedsCount];
+static unsigned short ownComputorIndicesMapping[computorSeedsCount];
 
-static TickStorage ts;
 static VoteCounter voteCounter;
 static ExecutionFeeReportCollector executionFeeReportCollector;
 static TickData nextTickData;
@@ -152,7 +164,8 @@ static unsigned int contractProcessorPhase;
 static const Transaction* contractProcessorTransaction = 0; // does not have signature in some cases, see notifyContractOfIncomingTransfer()
 static int contractProcessorTransactionMoneyflew = 0;
 static unsigned char contractProcessorPostIncomingTransferType = 0;
-static const UserProcedureNotification* contractProcessorUserProcedureNotification = 0;
+static const UserProcedureRegistry::UserProcedureData* contractProcessorUserProcedureNotificationProc = 0;
+static const void* contractProcessorUserProcedureNotificationInput = 0;
 static EFI_EVENT contractProcessorEvent;
 static m256i contractStateDigests[MAX_NUMBER_OF_CONTRACTS * 2 - 1];
 const unsigned long long contractStateDigestsSizeInBytes = sizeof(contractStateDigests);
@@ -199,6 +212,11 @@ static unsigned long long K12MeasurementsCount = 0;
 static unsigned long long K12MeasurementsSum = 0;
 static volatile char minerScoreArrayLock = 0;
 static SpecialCommandGetMiningScoreRanking<MAX_NUMBER_OF_MINERS> requestMiningScoreRanking;
+static constexpr unsigned int gScoreMultiplier[score_engine::AlgoType::MaxAlgoCount] =
+{
+    HYPERIDENTITY_SOLUTION_MULTIPLER,   // HyperIdentity
+    ADDITION_SOLUTION_MULTIPLER         // Addition
+};
 
 // Custom mining related variables and constants
 static unsigned int gCustomMiningSharesCount[NUMBER_OF_COMPUTORS] = { 0 };
@@ -357,18 +375,6 @@ static void logToConsole(const CHAR16* message)
 #endif
 }
 
-static int computorIndex(m256i computor)
-{
-    for (int computorIndex = 0; computorIndex < NUMBER_OF_COMPUTORS; computorIndex++)
-    {
-        if (broadcastedComputors.computors.publicKeys[computorIndex] == computor)
-        {
-            return computorIndex;
-        }
-    }
-
-    return -1;
-}
 
 static inline bool isMainMode()
 {
@@ -622,7 +628,7 @@ static void processBroadcastMessage(const unsigned long long processorNumber, Re
             }
             else
             {
-                for (unsigned int i = 0; i < sizeof(computorSeeds) / sizeof(computorSeeds[0]); i++)
+                for (unsigned int i = 0; i < computorSeedsCount; i++)
                 {
                     if (request->destinationPublicKey == computorPublicKeys[i])
                     {
@@ -771,7 +777,7 @@ static void processBroadcastComputors(Peer* peer, RequestResponseHeader* header)
                 {
                     minerPublicKeys[i] = request->computors.publicKeys[i];
 
-                    for (unsigned int j = 0; j < sizeof(computorSeeds) / sizeof(computorSeeds[0]); j++)
+                    for (unsigned int j = 0; j < computorSeedsCount; j++)
                     {
                         if (request->computors.publicKeys[i] == computorPublicKeys[j])
                         {
@@ -903,6 +909,25 @@ static void processBroadcastFutureTickData(Peer* peer, RequestResponseHeader* he
                     enqueueResponse(NULL, header);
                 }
 
+#if !defined(NDEBUG) && 1
+                unsigned int txCount = 0;
+                for (unsigned int transactionIndex = 0; transactionIndex < NUMBER_OF_TRANSACTIONS_PER_TICK; transactionIndex++)
+                {
+                    if (!isZero(request->tickData.transactionDigests[transactionIndex]))
+                    {
+                        txCount++;
+                    }
+                }
+                CHAR16 dbgMsg1[200];
+                setText(dbgMsg1, L"processBroadcastFutureTickData(), current tick ");
+                appendNumber(dbgMsg1, system.tick, FALSE);
+                appendText(dbgMsg1, ", tickData.tick ");
+                appendNumber(dbgMsg1, request->tickData.tick, FALSE);
+                appendText(dbgMsg1, ", tx count ");
+                appendNumber(dbgMsg1, txCount, FALSE);
+                addDebugMessage(dbgMsg1);
+#endif
+
                 ts.tickData.acquireLock();
                 TickData& td = ts.tickData.getByTickInCurrentEpoch(request->tickData.tick);
                 if (td.epoch != INVALIDATED_TICK_DATA)
@@ -959,12 +984,26 @@ static void processBroadcastTransaction(Peer* peer, RequestResponseHeader* heade
 {
     Transaction* request = header->getPayload<Transaction>();
     const unsigned int transactionSize = request->totalSize();
+
+#if !defined(NDEBUG) && 1
+    // TODO: remove this debug code when the OM pipeline is fully stable
+    CHAR16 dbgMsg[200];
+    setText(dbgMsg, L"processBroadcastTransaction(), tick ");
+    appendNumber(dbgMsg, system.tick, FALSE);
+#endif
+
     if (request->checkValidity() && transactionSize == header->size() - sizeof(RequestResponseHeader))
     {
+#if !defined(NDEBUG) && 1
+        appendText(dbgMsg, L" valid");
+#endif
         unsigned char digest[32];
         KangarooTwelve(request, transactionSize - SIGNATURE_SIZE, digest, sizeof(digest));
         if (verify(request->sourcePublicKey.m256i_u8, digest, request->signaturePtr()))
         {
+#if !defined(NDEBUG) && 1
+            appendText(dbgMsg, L" verified");
+#endif
             if (header->isDejavuZero())
             {
                 enqueueResponse(NULL, header);
@@ -999,8 +1038,32 @@ static void processBroadcastTransaction(Peer* peer, RequestResponseHeader* heade
                 }
             }
             ts.tickData.releaseLock();
+
+            // shortcut: oracle reply reveal transactions are analyzed immediately after receiving them (before execution of the tx),
+            // in order to minimize the number of reveal transaction (one per oracle query is enough, so no reveal tx is generated
+            // after one has been seen)
+            if (isZero(request->destinationPublicKey) && request->inputType == OracleReplyRevealTransactionPrefix::transactionType())
+            {
+#if !defined(NDEBUG) && 1
+                appendText(dbgMsg, L" reveal");
+                addDebugMessage(dbgMsg);
+#endif
+                oracleEngine.announceExpectedRevealTransaction((OracleReplyRevealTransactionPrefix*)request);
+            }
+
+            if (isZero(request->destinationPublicKey) && request->inputType == OracleReplyCommitTransactionPrefix::transactionType())
+            {
+#if !defined(NDEBUG) && 0
+                appendText(dbgMsg, L" commit");
+                addDebugMessage(dbgMsg);
+#endif
+            }
         }
     }
+
+#if !defined(NDEBUG) && 0
+    addDebugMessage(dbgMsg);
+#endif
 }
 
 static void processRequestComputors(Peer* peer, RequestResponseHeader* header)
@@ -1741,6 +1804,22 @@ static void processSpecialCommand(Peer* peer, RequestResponseHeader* header)
     }
 }
 
+static void processOracleMachineReply(Peer* peer, RequestResponseHeader* header)
+{
+    // Ignore message fron non oracle machine node
+    if (!peer->isOracleMachineNode())
+    {
+        return;
+    }
+
+    auto* msg = header->getPayload<OracleMachineReply>();
+    if (header->size() >= sizeof(RequestResponseHeader) + sizeof(OracleMachineReply))
+    {
+        oracleEngine.processOracleMachineReply(msg, header->getPayloadSize());
+        peer->lastOMActivityTime = __rdtsc();
+    }
+}
+
 // a tracker to detect if a thread is crashed
 static void checkinTime(unsigned long long processorNumber)
 {
@@ -2206,11 +2285,13 @@ static void requestProcessor(void* ProcedureArgument)
                     processRequestAssets(peer, header);
                 }
                 break;
+
                 case RequestCustomMiningSolutionVerification::type():
                 {
                     processRequestedCustomMiningSolutionVerificationRequest(peer, header);
                 }
                 break;
+
                 case RequestCustomMiningData::type():
                 {
                     processCustomMiningDataRequest(peer, processorNumber, header);
@@ -2220,6 +2301,18 @@ static void requestProcessor(void* ProcedureArgument)
                 case SpecialCommand::type():
                 {
                     processSpecialCommand(peer, header);
+                }
+                break;
+
+                case OracleMachineReply::type():
+                {
+                    processOracleMachineReply(peer, header);
+                }
+                break;
+
+                case RequestOracleData::type():
+                {
+                    oracleEngine.processRequestOracleData(peer, header);
                 }
                 break;
 
@@ -2440,15 +2533,17 @@ static void contractProcessor(void*)
 
     case USER_PROCEDURE_NOTIFICATION_CALL:
     {
-        const auto* notification = contractProcessorUserProcedureNotification;
-        ASSERT(notification && notification->procedure && notification->inputPtr);
+        const auto* notification = contractProcessorUserProcedureNotificationProc;
+        ASSERT(notification && notification->procedure);
         ASSERT(notification->inputSize <= MAX_INPUT_SIZE);
         ASSERT(notification->localsSize <= MAX_SIZE_OF_CONTRACT_LOCALS);
+        ASSERT(contractProcessorUserProcedureNotificationInput);
 
         QpiContextUserProcedureNotificationCall qpiContext(*notification);
-        qpiContext.call();
+        qpiContext.call(contractProcessorUserProcedureNotificationInput);
 
-        contractProcessorUserProcedureNotification = 0;
+        contractProcessorUserProcedureNotificationProc = 0;
+        contractProcessorUserProcedureNotificationInput = 0;
     }
     break;
     }
@@ -2467,7 +2562,7 @@ static void contractProcessor(void*)
 static void notifyContractOfIncomingTransfer(const m256i& source, const m256i& dest, long long amount, unsigned char type)
 {
     // Only notify if amount > 0 and dest is contract
-    if (amount <= 0 || dest.u64._0 >= contractCount || dest.u64._1 || dest.u64._2 || dest.u64._3)
+    if (amount <= 0 || !isPublicKeyOfContract(dest))
         return;
 
     // Also don't run contract processor if the callback isn't implemented in the dest contract
@@ -2594,7 +2689,7 @@ static void processTickTransactionSolution(const MiningSolutionTransaction* tran
                     logger.logQuTransfer(quTransfer);
                 }
 
-                for (unsigned int i = 0; i < sizeof(computorSeeds) / sizeof(computorSeeds[0]); i++)
+                for (unsigned int i = 0; i < computorSeedsCount; i++)
                 {
                     if (transaction->sourcePublicKey == computorPublicKeys[i])
                     {
@@ -2633,7 +2728,7 @@ static void processTickTransactionSolution(const MiningSolutionTransaction* tran
                 {
                     if (transaction->sourcePublicKey == minerPublicKeys[minerIndex])
                     {
-                        minerScores[minerIndex]++;
+                        minerScores[minerIndex] += gScoreMultiplier[selectedAlgo];
 
                         break;
                     }
@@ -2642,7 +2737,7 @@ static void processTickTransactionSolution(const MiningSolutionTransaction* tran
                     && numberOfMiners < MAX_NUMBER_OF_MINERS)
                 {
                     minerPublicKeys[numberOfMiners] = transaction->sourcePublicKey;
-                    minerScores[numberOfMiners++] = 1;
+                    minerScores[numberOfMiners++] = gScoreMultiplier[selectedAlgo];
                 }
 
                 const m256i tmpPublicKey = minerPublicKeys[minerIndex];
@@ -2727,7 +2822,7 @@ static void processTickTransactionSolution(const MiningSolutionTransaction* tran
     }
     else
     {
-        for (unsigned int i = 0; i < sizeof(computorSeeds) / sizeof(computorSeeds[0]); i++)
+        for (unsigned int i = 0; i < computorSeedsCount; i++)
         {
             if (transaction->sourcePublicKey == computorPublicKeys[i])
             {
@@ -2762,33 +2857,7 @@ static void processTickTransactionSolution(const MiningSolutionTransaction* tran
     }
 }
 
-static void processTickTransactionOracleReplyCommit(const OracleReplyCommitTransaction* transaction)
-{
-    PROFILE_SCOPE();
-
-    ASSERT(nextTickData.epoch == system.epoch);
-    ASSERT(transaction != nullptr);
-    ASSERT(transaction->checkValidity());
-    ASSERT(isZero(transaction->destinationPublicKey));
-    ASSERT(transaction->tick == system.tick);
-
-    // TODO
-}
-
-static void processTickTransactionOracleReplyReveal(const OracleReplyRevealTransactionPrefix* transaction)
-{
-    PROFILE_SCOPE();
-
-    ASSERT(nextTickData.epoch == system.epoch);
-    ASSERT(transaction != nullptr);
-    ASSERT(transaction->checkValidity());
-    ASSERT(isZero(transaction->destinationPublicKey));
-    ASSERT(transaction->tick == system.tick);
-
-    // TODO
-}
-
-static void processTickTransaction(const Transaction* transaction, const m256i& transactionDigest, const m256i& dataLock, unsigned long long processorNumber)
+static void processTickTransaction(const Transaction* transaction, unsigned int transactionIndex, unsigned long long processorNumber)
 {
     PROFILE_SCOPE();
 
@@ -2796,11 +2865,35 @@ static void processTickTransaction(const Transaction* transaction, const m256i& 
     ASSERT(transaction != nullptr);
     ASSERT(transaction->checkValidity());
     ASSERT(transaction->tick == system.tick);
+
+    const m256i& transactionDigest = nextTickData.transactionDigests[transactionIndex];
+    const m256i& dataLock = nextTickData.timelock;
 
     // Record the tx with digest
     ts.transactionsDigestAccess.acquireLock();
     ts.transactionsDigestAccess.insertTransaction(transactionDigest, transaction);
     ts.transactionsDigestAccess.releaseLock();
+
+#if !defined(NDEBUG)
+    if (isZero(transaction->destinationPublicKey))
+    {
+        CHAR16 dbgMsg[200];
+        /*
+        if (transaction->inputType == OracleReplyCommitTransactionPrefix::transactionType())
+        {
+            setText(dbgMsg, L"OracleReplyCommitTransaction found in processTickTransaction(), tick ");
+            appendNumber(dbgMsg, system.tick, FALSE);
+            addDebugMessage(dbgMsg);
+        }
+        */
+        if (transaction->inputType == OracleReplyRevealTransactionPrefix::transactionType())
+        {
+            setText(dbgMsg, L"OracleReplyRevealTransaction found in processTickTransaction(), tick ");
+            appendNumber(dbgMsg, system.tick, FALSE);
+            addDebugMessage(dbgMsg);
+        }
+    }
+#endif
 
     const int spectrumIndex = ::spectrumIndex(transaction->sourcePublicKey);
     if (spectrumIndex >= 0)
@@ -2873,22 +2966,24 @@ static void processTickTransaction(const Transaction* transaction, const m256i& 
                 }
                 break;
 
-                case OracleReplyCommitTransaction::transactionType():
+                case OracleReplyCommitTransactionPrefix::transactionType():
                 {
-                    if (computorIndex(transaction->sourcePublicKey) >= 0
-                        && transaction->inputSize == sizeof(OracleReplyCommitTransaction))
-                    {
-                        processTickTransactionOracleReplyCommit((OracleReplyCommitTransaction*)transaction);
-                    }
+                    oracleEngine.processOracleReplyCommitTransaction((OracleReplyCommitTransactionPrefix*)transaction);
                 }
                 break;
 
                 case OracleReplyRevealTransactionPrefix::transactionType():
                 {
-                    if (computorIndex(transaction->sourcePublicKey) >= 0
-                        && transaction->inputSize >= sizeof(OracleReplyRevealTransactionPrefix) + sizeof(OracleReplyRevealTransactionPostfix))
+                    oracleEngine.processOracleReplyRevealTransaction((OracleReplyRevealTransactionPrefix*)transaction, transactionIndex);
+                }
+                break;
+
+                case OracleUserQueryTransactionPrefix::transactionType():
+                {
+                    const bool error = (oracleEngine.startUserQuery((OracleUserQueryTransactionPrefix*)transaction, transactionIndex) < 0);
+                    if (error && transaction->amount)
                     {
-                        processTickTransactionOracleReplyReveal((OracleReplyRevealTransactionPrefix*)transaction);
+                        oracleEngine.refundFees(transaction->sourcePublicKey, transaction->amount);
                     }
                 }
                 break;
@@ -3266,7 +3361,7 @@ static void processTick(unsigned long long processorNumber)
                 {
                     Transaction* transaction = ts.tickTransactions(tsCurrentTickTransactionOffsets[transactionIndex]);
                     logger.registerNewTx(transaction->tick, transactionIndex);
-                    processTickTransaction(transaction, nextTickData.transactionDigests[transactionIndex], nextTickData.timelock, processorNumber);
+                    processTickTransaction(transaction, transactionIndex, processorNumber);
                 }
                 else
                 {
@@ -3278,6 +3373,28 @@ static void processTick(unsigned long long processorNumber)
             }
         }
         PROFILE_SCOPE_END();
+    }
+
+    // Check for oracle query timeouts (may schedule notification)
+    oracleEngine.processTimeouts();
+
+    // Notify contracts about successfully obtained oracle replies and about errors (using contract processor)
+    const OracleNotificationData* oracleNotification = oracleEngine.getNotification();
+    while (oracleNotification)
+    {
+        PROFILE_NAMED_SCOPE("processTick(): run oracle contract notification");
+        logger.registerNewTx(system.tick, logger.SC_NOTIFICATION_TX);
+        contractProcessorUserProcedureNotificationProc = userProcedureRegistry->get(oracleNotification->procedureId);
+        contractProcessorUserProcedureNotificationInput = oracleNotification->inputBuffer;
+        ASSERT(contractProcessorUserProcedureNotificationProc);
+        ASSERT(contractProcessorUserProcedureNotificationProc->contractIndex == oracleNotification->contractIndex);
+        ASSERT(contractProcessorUserProcedureNotificationProc->inputSize == oracleNotification->inputSize);
+        ASSERT(contractProcessorUserProcedureNotificationInput);
+        contractProcessorPhase = USER_PROCEDURE_NOTIFICATION_CALL;
+        contractProcessorState = 1;
+        WAIT_WHILE(contractProcessorState);
+
+        oracleNotification = oracleEngine.getNotification();
     }
 
     // The last executionFeeReport for the previous phase is published by comp <NUMBER_OF_COMPUTORS - 1> (0-indexed) in the last tick t1 of the
@@ -3331,6 +3448,21 @@ static void processTick(unsigned long long processorNumber)
 
     getUniverseDigest(etalonTick.saltedUniverseDigest);
     getComputerDigest(etalonTick.saltedComputerDigest);
+
+#if !defined(NDEBUG) && 1
+    {
+        CHAR16 dbgMsg[500];
+        setText(dbgMsg, L"pending tx: tick/count");
+        for (unsigned int i = system.tick; i < system.tick + ORACLE_REPLY_COMMIT_PUBLICATION_OFFSET; ++i)
+        {
+            appendText(dbgMsg, " ");
+            appendNumber(dbgMsg, i, FALSE);
+            appendText(dbgMsg, "/");
+            appendNumber(dbgMsg, pendingTxsPool.getNumberOfPendingTickTxs(i), FALSE);
+        }
+        addDebugMessage(dbgMsg);
+    }
+#endif
 
     // prepare custom mining shares packet ONCE
     if (isMainMode())
@@ -3494,11 +3626,95 @@ static void processTick(unsigned long long processorNumber)
         }
     }
 
+    // Publish oracle reply commit and reveal transactions
+    if (isMainMode())
+    {
+        unsigned char digest[32];
+        void* txBuffer = commonBuffers.acquireBuffer(MAX_TRANSACTION_SIZE);
+        {
+            PROFILE_NAMED_SCOPE("processTick(): broadcast oracle reply transactions");
+            const auto txTick = system.tick + ORACLE_REPLY_COMMIT_PUBLICATION_OFFSET;
+            auto* tx = (OracleReplyCommitTransactionPrefix*)txBuffer;
+            unsigned int txCount = 0;
+            for (unsigned int i = 0; i < numberOfOwnComputorIndices; i++)
+            {
+                const auto ownCompIdx = ownComputorIndicesMapping[i];
+                const auto overallCompIdx = ownComputorIndices[i];
+                unsigned int retCode = 0;
+                do
+                {
+                    // create reply commit transaction in tx (without signature), returning:
+                    // - 0 if no tx was created (no need to send reply commits)
+                    // - UINT32_MAX if we all pending reply commits fitted into this one tx
+                    // - otherwise, an index value that has to be passed to the next call for building another tx
+                    retCode = oracleEngine.getReplyCommitTransaction(tx, overallCompIdx, ownCompIdx, txTick, retCode);
+                    if (!retCode)
+                        break;
+
+                    // sign and broadcast tx
+                    KangarooTwelve(tx, sizeof(Transaction) + tx->inputSize, digest, sizeof(digest));
+                    sign(computorSubseeds[ownCompIdx].m256i_u8, computorPublicKeys[ownCompIdx].m256i_u8, digest, tx->signaturePtr());
+                    enqueueResponse(NULL, tx->totalSize(), BROADCAST_TRANSACTION, 0, tx);
+                    ++txCount;
+                }
+                while (retCode != UINT32_MAX);
+            }
+
+#if !defined(NDEBUG)
+            if (txCount)
+            {
+                CHAR16 dbgMsg[300];
+                setText(dbgMsg, L"oracleEngine.getReplyCommitTransaction(), tick ");
+                appendNumber(dbgMsg, system.tick, FALSE);
+                appendText(dbgMsg, ", txScheduleTick ");
+                appendNumber(dbgMsg, txTick, FALSE);
+                for (unsigned int i = 0; i < numberOfOwnComputorIndices; i++)
+                {
+                    if (txTick % NUMBER_OF_COMPUTORS == ownComputorIndices[i])
+                    {
+                        appendText(dbgMsg, " (I am tick leader)");
+                    }
+                }
+                appendText(dbgMsg, ", total number of tx ");
+                appendNumber(dbgMsg, txCount, FALSE);
+                appendText(dbgMsg, ", last tx queryId");
+                unsigned short commitCount = tx->inputSize / sizeof(OracleReplyCommitTransactionItem);
+                auto* commits = reinterpret_cast<OracleReplyCommitTransactionItem*>(tx->inputPtr());
+                for (unsigned short i = 0; i < commitCount; ++i)
+                {
+                    appendText(dbgMsg, " ");
+                    appendNumber(dbgMsg, commits[i].queryId, FALSE);
+                }
+                addDebugMessage(dbgMsg);
+            }
+#endif
+        }
+
+        {
+            PROFILE_NAMED_SCOPE("processTick(): broadcast oracle reveal transactions");
+            auto* tx = (OracleReplyRevealTransactionPrefix*)txBuffer;
+            const auto txTick = system.tick + ORACLE_REPLY_REVEAL_PUBLICATION_OFFSET;
+            // create reply reveal transaction in tx (without signature), returning:
+            // - 0 if no tx was created (no need to send reply commits)
+            // - otherwise, an index value that has to be passed to the next call for building another tx
+            unsigned int retCode = 0;
+            while ((retCode = oracleEngine.getReplyRevealTransaction(tx, 0, txTick, retCode)) != 0)
+            {
+                // sign and broadcast tx
+                KangarooTwelve(tx, sizeof(Transaction) + tx->inputSize, digest, sizeof(digest));
+                sign(computorSubseeds[0].m256i_u8, computorPublicKeys[0].m256i_u8, digest, tx->signaturePtr());
+                enqueueResponse(NULL, tx->totalSize(), BROADCAST_TRANSACTION, 0, tx);
+            }
+        }
+
+        commonBuffers.releaseBuffer(txBuffer);
+    }
+
     if (isMainMode())
     {
         // Publish solutions that were sent via BroadcastMessage as MiningSolutionTransaction
         PROFILE_NAMED_SCOPE("processTick(): broadcast solutions as tx (from BroadcastMessage)");
-        for (unsigned int i = 0; i < sizeof(computorSeeds) / sizeof(computorSeeds[0]); i++)
+        for (unsigned int i = 0; i < computorSeedsCount; i++)
         {
             int solutionIndexToPublish = -1;
 
@@ -3638,6 +3854,7 @@ static void beginEpoch()
 #endif
     ts.beginEpoch(system.initialTick);
     pendingTxsPool.beginEpoch(system.initialTick);
+    oracleEngine.beginEpoch();
     voteCounter.init();
 #ifndef NDEBUG
     ts.checkStateConsistencyWithAssert();
@@ -3991,6 +4208,10 @@ static bool saveAllNodeStates()
 {
     PROFILE_SCOPE();
 
+#if !defined(NDEBUG)
+    forceLogToConsoleAsAddDebugMessage = true;
+#endif
+
     CHAR16 directory[16];
     setText(directory, L"ep");
     appendNumber(directory, system.epoch, false);
@@ -4139,6 +4360,14 @@ static bool saveAllNodeStates()
         return false;
     }
 
+#if !defined(NDEBUG)
+    oracleEngine.checkStateConsistencyWithAssert();
+#endif
+    if (!oracleEngine.saveSnapshot(system.epoch, directory))
+    {
+        return false;
+    }
+
 #if ADDON_TX_STATUS_REQUEST
     if (!saveStateTxStatus(numberOfTransactions, directory))
     {
@@ -4149,11 +4378,20 @@ static bool saveAllNodeStates()
 #if ENABLED_LOGGING
     logger.saveCurrentLoggingStates(directory);
 #endif
+
+#if !defined(NDEBUG)
+    forceLogToConsoleAsAddDebugMessage = false;
+#endif
+
     return true;
 }
 
 static bool loadAllNodeStates()
 {
+#if !defined(NDEBUG)
+    forceLogToConsoleAsAddDebugMessage = true;
+#endif
+
     CHAR16 directory[16];
     setText(directory, L"ep");
     appendNumber(directory, system.epoch, false);
@@ -4243,7 +4481,7 @@ static bool loadAllNodeStates()
     // update own computor indices
     for (unsigned int i = 0; i < NUMBER_OF_COMPUTORS; i++)
     {
-        for (unsigned int j = 0; j < sizeof(computorSeeds) / sizeof(computorSeeds[0]); j++)
+        for (unsigned int j = 0; j < computorSeedsCount; j++)
         {
             if (broadcastedComputors.computors.publicKeys[i] == computorPublicKeys[j])
             {
@@ -4302,6 +4540,14 @@ static bool loadAllNodeStates()
         return false;
     }
 
+    if (!oracleEngine.loadSnapshot(system.epoch, directory))
+    {
+        return false;
+    }
+#if !defined(NDEBUG)
+    oracleEngine.checkStateConsistencyWithAssert();
+#endif
+
 #if ADDON_TX_STATUS_REQUEST
     if (!loadStateTxStatus(numberOfTransactions, directory))
     {
@@ -4314,6 +4560,11 @@ static bool loadAllNodeStates()
     logToConsole(L"Loading old logger...");
     logger.loadLastLoggingStates(directory);
 #endif
+
+#if !defined(NDEBUG)
+    forceLogToConsoleAsAddDebugMessage = false;
+#endif
+
     return true;
 }
 
@@ -5297,8 +5548,11 @@ static void tickProcessor(void*)
 
                                     // Reorder futureComputors so requalifying computors keep their index
                                     // This is needed for correct execution fee reporting across epoch boundaries
-                                    static_assert(reorgBufferSize >= stableComputorIndexBufferSize(), "reorgBuffer too small for stable computor index");
+                                    static_assert(defaultCommonBuffersSize >= stableComputorIndexBufferSize(), "commonBuffers too small for stable computor index");
+                                    void* reorgBuffer = commonBuffers.acquireBuffer(stableComputorIndexBufferSize());
+                                    ASSERT(reorgBuffer);
                                     calculateStableComputorIndex(system.futureComputors, broadcastedComputors.computors.publicKeys, reorgBuffer);
+                                    commonBuffers.releaseBuffer(reorgBuffer);
 
                                     // instruct main loop to save system and wait until it is done
                                     systemMustBeSaved = true;
@@ -5613,7 +5867,7 @@ static bool initialize()
         if (!initSpectrum())
             return false;
 
-        if (!initCommonBuffers())
+        if (!commonBuffers.init(COMMON_BUFFERS_COUNT))
             return false;
 
         if (!initAssets())
@@ -5652,7 +5906,14 @@ static bool initialize()
         {
             return false;
         }
-            
+
+        if (!OI::initOracleInterfaces())
+        {
+            logToConsole(L"initOracleInterfaces() failed! Not all interfaces are properly defined!");
+            return false;
+        }
+        if (!oracleEngine.init(computorPublicKeys))
+            return false;
 
 #if ADDON_TX_STATUS_REQUEST
         if (!initTxStatusRequestAddOn())
@@ -5713,9 +5974,15 @@ static bool initialize()
             etalonTick.year = system.initialYear;
 
             loadSpectrum();
+
+#ifdef INCLUDE_CONTRACT_TEST_EXAMPLES
+            increaseEnergy(id(TESTEXC_CONTRACT_INDEX, 0, 0, 0), 100000000llu);
+#endif
+
             {
                 const unsigned long long beginningTick = __rdtsc();
 
+                // compute spectrum digest
                 unsigned int digestIndex;
                 for (digestIndex = 0; digestIndex < SPECTRUM_CAPACITY; digestIndex++)
                 {
@@ -5794,6 +6061,7 @@ static bool initialize()
             logToConsole(L"Loaded node state from snapshot, if you want to start from scratch please delete all snapshot files.");
         }
     }
+
 
     initializeContractErrors();
     initializeContracts();
@@ -5886,6 +6154,17 @@ static bool initialize()
         logToConsole(message);
     }
 
+    if (NUMBER_OF_OM_NODE_CONNECTIONS > 0)
+    {
+        logToConsole(L"Populating oracle machine node ...");
+        numberOfOMPeers = 0;
+        for (unsigned int i = 0; i < NUMBER_OF_OM_NODE_CONNECTIONS; i++)
+        {
+            const IPv4Address& peer_ip = *reinterpret_cast<const IPv4Address*>(oracleMachineIPs[i]);
+            copyMem(&omIPv4Address[numberOfOMPeers++], &peer_ip, sizeof(IPv4Address));
+        }
+    }
+
     logToConsole(L"Init TCP...");
     if (!initTcp4(PORT))
         return false;
@@ -5939,7 +6218,7 @@ static void deinitialize()
 
     deinitAssets();
     deinitSpectrum();
-    deinitCommonBuffers();
+    commonBuffers.deinit();
 
     logger.deinitLogging();
 
@@ -5948,6 +6227,8 @@ static void deinitialize()
 #if ADDON_TX_STATUS_REQUEST
     deinitTxStatusRequestAddOn();
 #endif
+
+    oracleEngine.deinit();
 
     deinitContractExec();
     for (unsigned int contractIndex = 0; contractIndex < contractCount; contractIndex++)
@@ -6257,6 +6538,7 @@ static void logInfo()
 
     logToConsole(message);
 
+    oracleEngine.logStatus();
 }
 
 static void logHealthStatus()
@@ -6354,7 +6636,7 @@ static void logHealthStatus()
             appendText(message, L"Contract #");
             appendNumber(message, i, FALSE);
             appendText(message, L": ");
-            const CHAR16* errorMsg = L"Unknown error";
+            const CHAR16* errorMsg = nullptr;
             switch (contractError[i])
             {
             // The alloc failures can be fixed by increasing the size of ContractLocalsStack
@@ -6366,8 +6648,12 @@ static void logHealthStatus()
             case ContractErrorTooManyActions: errorMsg = L"TooManyActions"; break;
             // Timeout requires to remove endless loop, speed-up code, or change the timeout
             case ContractErrorTimeout: errorMsg = L"Timeout"; break;
+            case ContractErrorIPOFailed: errorMsg = L"IPO failed"; break;
             }
-            appendText(message, errorMsg);
+            if (errorMsg)
+                appendText(message, errorMsg);
+            else
+                appendNumber(message, contractError[i], FALSE);
         }
     }
     if (!anyContractError)
@@ -6398,6 +6684,12 @@ static void logHealthStatus()
     appendNumber(message, contractLocalsStack[0].capacity(), TRUE);
     appendText(message, L" | max processors waiting ");
     appendNumber(message, contractLocalsStackLockWaitingCountMax, TRUE);
+    logToConsole(message);
+
+    setText(message, L"Common buffers: invalid release ");
+    appendNumber(message, commonBuffers.getInvalidReleaseCount(), FALSE);
+    appendText(message, L", max waiting processors ");
+    appendNumber(message, commonBuffers.getMaxWaitingProcessorCount(), FALSE);
     logToConsole(message);
 
     setText(message, L"Connections:");
@@ -6660,10 +6952,7 @@ static void processKeyPresses()
         case 0x0E:
         {
             logToConsole(L"Pressed F4 key");
-            for (unsigned int i = 0; i < NUMBER_OF_OUTGOING_CONNECTIONS + NUMBER_OF_INCOMING_CONNECTIONS; i++)
-            {
-                closePeer(&peers[i]);
-            }
+            closeAllPeers();
         }
         break;
 
@@ -7037,8 +7326,8 @@ EFI_STATUS efi_main(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE* systemTable)
 
                 for (unsigned int i = 0; i < NUMBER_OF_OUTGOING_CONNECTIONS + NUMBER_OF_INCOMING_CONNECTIONS; i++)
                 {
-                    // handle new connections
-                    if (peerConnectionNewlyEstablished(i))
+                    // handle new connections. For Oracle Machine, not need the ExchangePublicPeers
+                    if (peerConnectionNewlyEstablished(i) && !peers[i].isOracleMachineNode())
                     {
                         // new connection established:
                         // prepare and send ExchangePublicPeers message
@@ -7108,6 +7397,29 @@ EFI_STATUS efi_main(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE* systemTable)
 
                     // reconnect if this peer slot has no active connection
                     peerReconnectIfInactive(i, PORT);
+
+                    if (peers[i].isOracleMachineNode())
+                    {
+                        if (ORACLE_MACHINE_CONNECTION_TIMEOUT_SECS > 0
+                            && peers[i].connectionStartTime > 0
+                            && peers[i].isConnectingAccepting 
+                            && ((__rdtsc() - peers[i].connectionStartTime) / frequency > ORACLE_MACHINE_CONNECTION_TIMEOUT_SECS))
+                        {
+                            closePeer(&peers[i], ORACLE_MACHINE_GRACEFULL_CLOSE_RETIRES);
+                        }
+
+                        // inactivity timeout between 1 and 2 minutes (depending on peer index to reduce risk of
+                        // all OM node connections being closed simultaneously)
+                        const unsigned long long OM_INACTIVITY_TIMEOUT_SECS = 120 - (i % 5) * 15;
+                        if (peers[i].isConnectedAccepted &&
+                            !peers[i].isClosing &&
+                            peers[i].lastOMActivityTime > 0 &&
+                            ((__rdtsc() - peers[i].lastOMActivityTime) / frequency > OM_INACTIVITY_TIMEOUT_SECS))
+                        {
+                            closePeer(&peers[i], ORACLE_MACHINE_GRACEFULL_CLOSE_RETIRES);
+                        }
+                    }
+
                 }
 
 #if !TICK_STORAGE_AUTOSAVE_MODE
@@ -7135,7 +7447,8 @@ EFI_STATUS efi_main(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE* systemTable)
                     {
                         if (peers[i].tcp4Protocol && peers[i].isConnectedAccepted && !peers[i].isClosing)
                         {
-                            if (!peers[i].isFullNode())
+                            // Skip FullNode and OM nodes
+                            if (!peers[i].isFullNode() && !peers[i].isOMNode)
                             {
                                 suitablePeerIndices[numberOfSuitablePeers++] = i;
                             }
@@ -7240,13 +7553,17 @@ EFI_STATUS efi_main(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE* systemTable)
                     while (responseQueueElementTail != responseQueueElementHead)
                     {
                         RequestResponseHeader* responseHeader = (RequestResponseHeader*)&responseQueueBuffer[responseQueueElements[responseQueueElementTail].offset];
-                        if (responseQueueElements[responseQueueElementTail].peer)
+                        if (responseQueueElements[responseQueueElementTail].peer == 0)
                         {
-                            push(responseQueueElements[responseQueueElementTail].peer, responseHeader);
+                            pushToSeveral(responseHeader);
+                        }
+                        else if (responseQueueElements[responseQueueElementTail].peer == (Peer*)1)
+                        {
+                            pushToOracleMachineNodes(responseHeader);
                         }
                         else
                         {
-                            pushToSeveral(responseHeader);
+                            push(responseQueueElements[responseQueueElementTail].peer, responseHeader);
                         }
                         responseQueueBufferTail += responseHeader->size();
                         if (responseQueueBufferTail > RESPONSE_QUEUE_BUFFER_SIZE - BUFFER_SIZE)
@@ -7284,10 +7601,7 @@ EFI_STATUS efi_main(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE* systemTable)
                 if (forceRefreshPeerList)
                 {
                     forceRefreshPeerList = false;
-                    for (unsigned int i = 0; i < NUMBER_OF_OUTGOING_CONNECTIONS + NUMBER_OF_INCOMING_CONNECTIONS; i++)
-                    {
-                        closePeer(&peers[i]);
-                    }
+                    closeAllPeers();
                 }
 
                 processKeyPresses();
@@ -7326,10 +7640,7 @@ EFI_STATUS efi_main(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE* systemTable)
                 {
                     // Saving node state takes a lot of time -> Close peer connections before to signal that
                     // the peers should connect to another node.
-                    for (unsigned int i = 0; i < NUMBER_OF_OUTGOING_CONNECTIONS + NUMBER_OF_INCOMING_CONNECTIONS; i++)
-                    {
-                        closePeer(&peers[i]);
-                    }
+                    closeAllPeers(true);
 
                     logToConsole(L"Saving node state...");
                     saveAllNodeStates();
