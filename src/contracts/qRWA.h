@@ -20,9 +20,10 @@ constexpr uint64 QRWA_QMINE_PER_QRWA_SHARE_MIN = 100000ULL;
 constexpr uint64 QRWA_CONTRACT_ASSET_NAME = 1096241745ULL; // assetNameFromString("QRWA")
 
 // Payout Timing Constants
-constexpr uint64 QRWA_PAYOUT_DAY = FRIDAY; // Friday
-constexpr uint64 QRWA_PAYOUT_HOUR = 12; // 12:00 PM UTC
-constexpr uint64 QRWA_MIN_PAYOUT_INTERVAL_MS = 6 * 86400000LL; // 6 days in milliseconds
+constexpr uint64 QRWA_PAYOUT_DAY = FRIDAY; // Friday (Production)
+constexpr uint64 QRWA_PAYOUT_HOUR = 12; // 12:00 PM UTC (Production)
+constexpr uint64 QRWA_MIN_PAYOUT_INTERVAL_MS = 6 * 86400000LL; // 6 days in milliseconds (Production)
+constexpr uint64 QRWA_PAYOUT_TICK_INTERVAL = 100; // TESTING: Check every 100 ticks for payout
 
 // STATUS CODES for Procedures
 constexpr uint64 QRWA_STATUS_SUCCESS = 1;
@@ -188,7 +189,8 @@ protected:
     HashMap<QRWAAsset, uint64, QRWA_MAX_ASSETS> mGeneralAssetBalances; // Balances for other assets (e.g., SC shares)
 
     // Payouts and Dividend Accounting
-    DateAndTime mLastPayoutTime; // Tracks the last payout time
+    DateAndTime mLastPayoutTime; // Tracks the last payout time (Production)
+    uint64 mLastPayoutTick; // TESTING: Tick-based payout tracking
 
     // Dividend Pools
     uint64 mRevenuePoolA; // Mined funds from Qubic farm (from SCs)
@@ -1117,6 +1119,7 @@ public:
         state.mTreasuryBalance = 0;
         state.mCurrentAssetProposalId = 0;
         setMemory(state.mLastPayoutTime, 0);
+        state.mLastPayoutTick = 0;
 
         // Initialize default governance parameters
         state.mCurrentGovParams.mAdminAddress = ID(
@@ -1733,37 +1736,10 @@ public:
     {
         locals.now = qpi.now();
 
-        // Check payout conditions: Correct day, correct hour, and enough time passed
-        // TESTING: Freitag 12:00 Prüfung auskommentiert - nutze Tick 44602000 für Auszahlung
-        // if (qpi.dayOfWeek((uint8)mod(locals.now.getYear(), (uint16)100), locals.now.getMonth(), locals.now.getDay()) == QRWA_PAYOUT_DAY &&
-        //     locals.now.getHour() == QRWA_PAYOUT_HOUR)
-        if (qpi.tick() >= 44602200)  // TESTING: Nur bei Tick 44602000+ - entfernen für Production
+        // TESTING: Check every 100 ticks for payout distribution
+        // Production: Use day/hour check instead (QRWA_PAYOUT_DAY + QRWA_PAYOUT_HOUR)
+        if (state.mLastPayoutTick == 0 || (qpi.tick() - state.mLastPayoutTick) >= QRWA_PAYOUT_TICK_INTERVAL)
         {
-            // check if mLastPayoutTime is 0 (never initialized)
-            if (state.mLastPayoutTime.getYear() == 0)
-            {
-                // If never paid, treat as if enough time has passed
-                locals.msSinceLastPayout = QRWA_MIN_PAYOUT_INTERVAL_MS;
-            }
-            else
-            {
-                locals.durationMicros = state.mLastPayoutTime.durationMicrosec(locals.now);
-
-                if (locals.durationMicros != UINT64_MAX)
-                {
-                    locals.msSinceLastPayout = div<uint64>(locals.durationMicros, 1000);
-                }
-                else
-                {
-                    // If it's invalid but NOT zero, something is wrong, so we prevent payout
-                    locals.msSinceLastPayout = 0;
-                }
-            }
-
-            // TESTING: 6-Tage Minimum-Interval auskommentiert für sofortiges Testing
-            // if (locals.msSinceLastPayout >= QRWA_MIN_PAYOUT_INTERVAL_MS)
-            if (true)  // TESTING: Immer true - Auszahlung damit sofort bei Tick 44602000 - entfernen für Production
-            {
                 locals.logger.contractId = CONTRACT_INDEX;
                 locals.logger.logType = QRWA_LOG_TYPE_DISTRIBUTION;
 
@@ -2090,14 +2066,14 @@ public:
                     }
                 }
 
-                // Update last payout time
+                // Update last payout time/tick
                 state.mLastPayoutTime = qpi.now();
+                state.mLastPayoutTick = qpi.tick();
                 locals.logger.logType = QRWA_LOG_TYPE_DISTRIBUTION;
                 locals.logger.primaryId = NULL_ID;
                 locals.logger.valueA = 1; // Indicate success
                 locals.logger.valueB = 0;
                 LOG_INFO(locals.logger);
-            }
         }
     }
 
