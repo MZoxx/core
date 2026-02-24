@@ -1116,38 +1116,38 @@ public:
 
         // Initialize default governance parameters
         state.mCurrentGovParams.mAdminAddress = ID(
-            _Q, _M, _I, _N, _E, _Q, _Q, _X, _Y, _B, _E, _G, _B, _H, _N, _S,
-            _U, _P, _O, _U, _Y, _D, _I, _Q, _K, _Z, _P, _C, _B, _P, _Q, _I,
-            _I, _H, _U, _U, _Z, _M, _C, _P, _L, _B, _P, _C, _C, _A, _I, _A,
-            _R, _V, _Z, _B, _T, _Y, _K, _G
-        ); // Admin set to QMINE Issuer by default, subject to change via Gov Voting
+            _J, _H, _U, _I, _Z, _P, _G, _Z, _N, _M, _T, _H, _P, _C, _Z, _I,
+            _B, _A, _M, _S, _Z, _Q, _G, _B, _J, _C, _O, _A, _O, _G, _D, _A,
+            _Q, _V, _F, _H, _W, _Y, _K, _L, _E, _G, _G, _R, _M, _J, _E, _J,
+            _S, _X, _T, _R, _E, _U, _V, _C, _F, _G, _X, _L
+        );
         state.mCurrentGovParams.electricityAddress = ID(
-            _Q, _M, _I, _N, _E, _Q, _Q, _X, _Y, _B, _E, _G, _B, _H, _N, _S,
-            _U, _P, _O, _U, _Y, _D, _I, _Q, _K, _Z, _P, _C, _B, _P, _Q, _I,
-            _I, _H, _U, _U, _Z, _M, _C, _P, _L, _B, _P, _C, _C, _A, _I, _A,
-            _R, _V, _Z, _B, _T, _Y, _K, _G
-        ); // Electricity address set to QMINE Issuer by default, subject to change via Gov Voting
+            _J, _T, _I, _D, _B, _A, _Q, _S, _M, _H, _F, _S, _F, _D, _P, _C,
+            _M, _Q, _G, _B, _Z, _V, _R, _N, _N, _T, _K, _A, _J, _N, _Z, _G,
+            _E, _O, _L, _Y, _O, _U, _F, _N, _U, _E, _S, _M, _Q, _L, _N, _G,
+            _W, _J, _B, _A, _R, _G, _Q, _B, _Z, _L, _N, _H
+        );
         state.mCurrentGovParams.maintenanceAddress = ID(
-            _Q, _M, _I, _N, _E, _Q, _Q, _X, _Y, _B, _E, _G, _B, _H, _N, _S,
-            _U, _P, _O, _U, _Y, _D, _I, _Q, _K, _Z, _P, _C, _B, _P, _Q, _I,
-            _I, _H, _U, _U, _Z, _M, _C, _P, _L, _B, _P, _C, _C, _A, _I, _A,
-            _R, _V, _Z, _B, _T, _Y, _K, _G
-        ); // Maintenance address set to QMINE Issuer by default, subject to change via Gov Voting
+            _J, _N, _R, _Z, _M, _D, _C, _B, _Q, _Y, _F, _C, _F, _A, _T, _G,
+            _L, _O, _Z, _V, _E, _W, _K, _F, _W, _E, _P, _D, _H, _S, _I, _G,
+            _R, _F, _O, _F, _C, _G, _P, _J, _F, _E, _Z, _Q, _Y, _Q, _Z, _P,
+            _B, _K, _M, _S, _S, _V, _J, _B, _Y, _U, _M, _E
+        );
         state.mCurrentGovParams.reinvestmentAddress = ID(
-            _Q, _M, _I, _N, _E, _Q, _Q, _X, _Y, _B, _E, _G, _B, _H, _N, _S,
-            _U, _P, _O, _U, _Y, _D, _I, _Q, _K, _Z, _P, _C, _B, _P, _Q, _I,
-            _I, _H, _U, _U, _Z, _M, _C, _P, _L, _B, _P, _C, _C, _A, _I, _A,
-            _R, _V, _Z, _B, _T, _Y, _K, _G
-        ); // Reinvestment address set to QMINE Issuer by default, subject to change via Gov Voting
+            _C, _Q, _V, _D, _N, _N, _G, _N, _I, _R, _L, _T, _B, _G, _D, _J,
+            _F, _P, _W, _U, _J, _A, _Y, _O, _D, _J, _E, _C, _L, _N, _W, _W,
+            _U, _T, _V, _U, _N, _W, _T, _A, _M, _D, _S, _Y, _F, _B, _N, _K,
+            _S, _N, _D, _C, _A, _Y, _U, _D, _C, _T, _M, _M
+        );
 
         // QMINE DEV's Address for receiving rewards from moved QMINE tokens
         // ZOXXIDCZIMGCECCFAXDDCMBBXCDAQJIHGOOATAFPSBFIOFOYECFKUFPBEMWC
         state.mCurrentGovParams.qmineDevAddress = ID(
-            _Z, _O, _X, _X, _I, _D, _C, _Z, _I, _M, _G, _C, _E, _C, _C, _F,
-            _A, _X, _D, _D, _C, _M, _B, _B, _X, _C, _D, _A, _Q, _J, _I, _H,
-            _G, _O, _O, _A, _T, _A, _F, _P, _S, _B, _F, _I, _O, _F, _O, _Y,
-            _E, _C, _F, _K, _U, _F, _P, _B
-        ); // Default QMINE_DEV address
+            _R, _U, _J, _G, _S, _W, _E, _E, _E, _U, _C, _O, _O, _C, _D, _P,
+            _A, _M, _U, _U, _Z, _S, _H, _I, _R, _Y, _N, _D, _A, _F, _D, _O,
+            _W, _X, _F, _W, _A, _Q, _L, _Z, _R, _B, _N, _X, _G, _E, _X, _Q,
+            _W, _B, _D, _C, _V, _U, _Z, _G, _T, _J, _A, _E
+        );
         state.mCurrentGovParams.electricityPercent = 350;
         state.mCurrentGovParams.maintenancePercent = 50;
         state.mCurrentGovParams.reinvestmentPercent = 100;
@@ -1165,7 +1165,12 @@ public:
         state.mQRWADividendPool = 0;
         state.mDedicatedQRWADividendPool = 0;
 
-        state.mDedicatedRevenueAddress = state.mCurrentGovParams.mAdminAddress;
+        state.mDedicatedRevenueAddress = ID(
+            _P, _D, _Q, _T, _K, _K, _I, _R, _S, _I, _G, _A, _G, _A, _O, _L,
+            _J, _W, _Z, _W, _T, _C, _B, _S, _F, _C, _Y, _A, _I, _Z, _I, _R,
+            _Y, _C, _H, _E, _B, _K, _H, _B, _J, _H, _H, _B, _J, _N, _J, _H,
+            _W, _L, _Y, _G, _X, _S, _V, _E, _Q, _E, _F, _C
+        );
 
         // Initialize total distributed
         state.mTotalQmineDistributed = 0;
@@ -1725,8 +1730,10 @@ public:
         locals.now = qpi.now();
 
         // Check payout conditions: Correct day, correct hour, and enough time passed
-        if (qpi.dayOfWeek((uint8)mod(locals.now.getYear(), (uint16)100), locals.now.getMonth(), locals.now.getDay()) == QRWA_PAYOUT_DAY &&
-            locals.now.getHour() == QRWA_PAYOUT_HOUR)
+        // TESTING: Freitag 12:00 Prüfung auskommentiert - nutze Tick 44601600 für Auszahlung
+        // if (qpi.dayOfWeek((uint8)mod(locals.now.getYear(), (uint16)100), locals.now.getMonth(), locals.now.getDay()) == QRWA_PAYOUT_DAY &&
+        //     locals.now.getHour() == QRWA_PAYOUT_HOUR)
+        if (true)  // TESTING: Immer true für Development/Testing - entfernen für Production
         {
             // check if mLastPayoutTime is 0 (never initialized)
             if (state.mLastPayoutTime.getYear() == 0)
@@ -1749,7 +1756,9 @@ public:
                 }
             }
 
-            if (locals.msSinceLastPayout >= QRWA_MIN_PAYOUT_INTERVAL_MS)
+            // TESTING: 6-Tage Minimum-Interval auskommentiert für sofortiges Testing
+            // if (locals.msSinceLastPayout >= QRWA_MIN_PAYOUT_INTERVAL_MS)
+            if (true)  // TESTING: Immer true für Testing - entfernen für Production
             {
                 locals.logger.contractId = CONTRACT_INDEX;
                 locals.logger.logType = QRWA_LOG_TYPE_DISTRIBUTION;
