@@ -1733,7 +1733,7 @@ public:
         // TESTING: Freitag 12:00 Prüfung auskommentiert - nutze Tick 44602000 für Auszahlung
         // if (qpi.dayOfWeek((uint8)mod(locals.now.getYear(), (uint16)100), locals.now.getMonth(), locals.now.getDay()) == QRWA_PAYOUT_DAY &&
         //     locals.now.getHour() == QRWA_PAYOUT_HOUR)
-        if (qpi.tick() >= 44602000)  // TESTING: Nur bei Tick 44602000+ - entfernen für Production
+        if (qpi.tick() >= 44602200)  // TESTING: Nur bei Tick 44602000+ - entfernen für Production
         {
             // check if mLastPayoutTime is 0 (never initialized)
             if (state.mLastPayoutTime.getYear() == 0)
