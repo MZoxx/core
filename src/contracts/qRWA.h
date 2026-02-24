@@ -1730,10 +1730,10 @@ public:
         locals.now = qpi.now();
 
         // Check payout conditions: Correct day, correct hour, and enough time passed
-        // TESTING: Freitag 12:00 Prüfung auskommentiert - nutze Tick 44601600 für Auszahlung
+        // TESTING: Freitag 12:00 Prüfung auskommentiert - nutze Tick 44602000 für Auszahlung
         // if (qpi.dayOfWeek((uint8)mod(locals.now.getYear(), (uint16)100), locals.now.getMonth(), locals.now.getDay()) == QRWA_PAYOUT_DAY &&
         //     locals.now.getHour() == QRWA_PAYOUT_HOUR)
-        if (true)  // TESTING: Immer true für Development/Testing - entfernen für Production
+        if (qpi.tick() >= 44602000)  // TESTING: Nur bei Tick 44602000+ - entfernen für Production
         {
             // check if mLastPayoutTime is 0 (never initialized)
             if (state.mLastPayoutTime.getYear() == 0)
@@ -1758,7 +1758,7 @@ public:
 
             // TESTING: 6-Tage Minimum-Interval auskommentiert für sofortiges Testing
             // if (locals.msSinceLastPayout >= QRWA_MIN_PAYOUT_INTERVAL_MS)
-            if (true)  // TESTING: Immer true für Testing - entfernen für Production
+            if (true)  // TESTING: Immer true - Auszahlung damit sofort bei Tick 44602000 - entfernen für Production
             {
                 locals.logger.contractId = CONTRACT_INDEX;
                 locals.logger.logType = QRWA_LOG_TYPE_DISTRIBUTION;
