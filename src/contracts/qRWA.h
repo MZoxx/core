@@ -1708,6 +1708,7 @@ public:
         uint64 dedicatedQrwaPayout;
         uint64 amountPerQRWAShare;
         uint64 distributedAmount;
+        uint64 eligibleShares;
         uint64 dedicatedEligibleShares;
         uint64 dedicatedAmountPerShare;
         uint64 dedicatedDistributed;
@@ -1944,16 +1945,111 @@ public:
                     state.mQmineDividendPool = locals.qmineDividendPool_128.low;
                 } // End QMINE distribution
 
-                // Distribute qRWA shareholder rewards
+                // Distribute qRWA shareholder rewards (only to holders with >= 100K QMINE per qRWA share)
                 if (state.mQRWADividendPool > 0)
                 {
-                    locals.amountPerQRWAShare = div<uint64>(state.mQRWADividendPool, NUMBER_OF_COMPUTORS);
-                    if (locals.amountPerQRWAShare > 0)
+                    locals.qrwaAsset.issuer = id::zero();
+                    locals.qrwaAsset.assetName = QRWA_CONTRACT_ASSET_NAME;
+                    locals.eligibleShares = 0;
+
+                    // First pass: count eligible shares
+                    for (locals.qrwaIter.begin(locals.qrwaAsset); !locals.qrwaIter.reachedEnd(); locals.qrwaIter.next())
                     {
-                        if (qpi.distributeDividends(static_cast<sint64>(locals.amountPerQRWAShare)))
+                        locals.qrwaShares = static_cast<uint64>(locals.qrwaIter.numberOfPossessedShares());
+                        if (locals.qrwaShares == 0)
                         {
-                            locals.distributedAmount = smul(locals.amountPerQRWAShare, static_cast<uint64>(NUMBER_OF_COMPUTORS));
-                            state.mQRWADividendPool -= locals.distributedAmount;
+                            continue;
+                        }
+
+                        locals.holder = locals.qrwaIter.possessor();
+                        if (locals.holder == SELF)
+                        {
+                            continue;
+                        }
+
+                        locals.qmineBalance = qpi.numberOfShares(
+                            state.mQmineAsset,
+                            AssetOwnershipSelect::byOwner(locals.holder),
+                            AssetPossessionSelect::byPossessor(locals.holder)
+                        );
+
+                        if (locals.qmineBalance <= 0)
+                        {
+                            continue;
+                        }
+
+                        locals.requiredQmine = smul(locals.qrwaShares, QRWA_QMINE_PER_QRWA_SHARE_MIN);
+                        if (static_cast<uint64>(locals.qmineBalance) >= locals.requiredQmine)
+                        {
+                            locals.eligibleShares = sadd(locals.eligibleShares, locals.qrwaShares);
+                        }
+                    }
+
+                    if (locals.eligibleShares > 0)
+                    {
+                        locals.amountPerQRWAShare = div<uint64>(state.mQRWADividendPool, locals.eligibleShares);
+                        if (locals.amountPerQRWAShare > 0)
+                        {
+                            locals.distributedAmount = 0;
+
+                            // Second pass: distribute to eligible holders
+                            for (locals.qrwaIter.begin(locals.qrwaAsset); !locals.qrwaIter.reachedEnd(); locals.qrwaIter.next())
+                            {
+                                locals.qrwaShares = static_cast<uint64>(locals.qrwaIter.numberOfPossessedShares());
+                                if (locals.qrwaShares == 0)
+                                {
+                                    continue;
+                                }
+
+                                locals.holder = locals.qrwaIter.possessor();
+                                if (locals.holder == SELF)
+                                {
+                                    continue;
+                                }
+
+                                locals.qmineBalance = qpi.numberOfShares(
+                                    state.mQmineAsset,
+                                    AssetOwnershipSelect::byOwner(locals.holder),
+                                    AssetPossessionSelect::byPossessor(locals.holder)
+                                );
+
+                                if (locals.qmineBalance <= 0)
+                                {
+                                    continue;
+                                }
+
+                                locals.requiredQmine = smul(locals.qrwaShares, QRWA_QMINE_PER_QRWA_SHARE_MIN);
+                                if (static_cast<uint64>(locals.qmineBalance) < locals.requiredQmine)
+                                {
+                                    continue;
+                                }
+
+                                locals.payout_u64 = smul(locals.amountPerQRWAShare, locals.qrwaShares);
+                                if (locals.payout_u64 > 0)
+                                {
+                                    if (qpi.transfer(locals.holder, static_cast<sint64>(locals.payout_u64)) >= 0)
+                                    {
+                                        locals.distributedAmount = sadd(locals.distributedAmount, locals.payout_u64);
+                                    }
+                                    else
+                                    {
+                                        locals.logger.logType = QRWA_LOG_TYPE_ERROR;
+                                        locals.logger.primaryId = locals.holder;
+                                        locals.logger.valueA = locals.payout_u64;
+                                        locals.logger.valueB = QRWA_STATUS_FAILURE_TRANSFER_FAILED;
+                                        LOG_INFO(locals.logger);
+                                    }
+                                }
+                            }
+
+                            if (state.mQRWADividendPool > locals.distributedAmount)
+                            {
+                                state.mQRWADividendPool -= locals.distributedAmount;
+                            }
+                            else
+                            {
+                                state.mQRWADividendPool = 0;
+                            }
                             state.mTotalQRWADistributed = sadd(state.mTotalQRWADistributed, locals.distributedAmount);
                         }
                     }
