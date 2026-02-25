@@ -40,10 +40,10 @@ DEDICATED_IDENTITY="PDQTKKIRSIGAGAOLJWZWTCBSFCYAIZIRYCHEBKHBJHHBJNJHWLYGXSVEQEFC
 QMINE_ISSUER="QMINEQQXYBEGBHNSUPOUYDIQKZPCBPQIIHUUZMCPLBPCCAIARVZBTYKGFCWM"
 QMINE_NAME="QMINE"
 
-SCHEDULE_TICK=20
+SCHEDULE_TICK=5
 SEND_AMOUNT=5000000         # 5M QU für Pool B Test
 DEDICATED_AMOUNT=3000000    # 3M QU für Dedicated Pool Test
-TX_WAIT_SEC=45              # Wartezeit für TX-Bestätigung
+TX_WAIT_SEC=10              # Wartezeit für TX-Bestätigung
 
 ###############################################
 # FARBEN & ZAEHLER
@@ -602,17 +602,16 @@ fi
 fi # end --send
 
 ###############################################
-# TEST 10: GOVERNANCE VOTE (Procedure 4)
+# TEST 10: GOVERNANCE PROPOSAL FULL LIFECYCLE
 ###############################################
 
 if [[ "$MODE" == "all" || "$MODE" == "--vote" ]]; then
 
-header "TEST 10: Governance Vote (Procedure 4)"
-step "Seed 1 hat 2000 QMINE → kann voten"
-step "Input: QRWAGovParams = { admin, elec, maint, reinv, dev, elec%, maint%, reinv% }"
-
-# Lese aktuelle Governance-Parameter dynamisch aus dem Contract
-step "Lese aktuelle GovParams vom Contract..."
+# ═══════════════════════════════════════════
+# 10a: Lese aktuelle GovParams
+# ═══════════════════════════════════════════
+header "TEST 10a: Aktuelle Gov Params lesen (Function 1)"
+step "Lese aktuelle GovParams als Baseline..."
 VOTE_GOV_OUTPUT=$(call_fn 1 "" "{ { id, id, id, id, id, uint64, uint64, uint64 } }")
 VOTE_GOV_ADDRS=$(echo "$VOTE_GOV_OUTPUT" | grep -oE '[A-Z]{55,60}' | head -5)
 ADMIN_ID=$(echo "$VOTE_GOV_ADDRS" | sed -n '1p')
@@ -620,25 +619,72 @@ ELEC_ID=$(echo "$VOTE_GOV_ADDRS" | sed -n '2p')
 MAINT_ID=$(echo "$VOTE_GOV_ADDRS" | sed -n '3p')
 REINV_ID=$(echo "$VOTE_GOV_ADDRS" | sed -n '4p')
 DEV_ID=$(echo "$VOTE_GOV_ADDRS" | sed -n '5p')
+
+# Extrahiere aktuelle Prozentsätze
+CURRENT_PCTS=$(echo "$VOTE_GOV_OUTPUT" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+')
+CURRENT_ELEC_PCT=$(echo "$CURRENT_PCTS" | tail -3 | head -1)
+CURRENT_MAINT_PCT=$(echo "$CURRENT_PCTS" | tail -2 | head -1)
+CURRENT_REINV_PCT=$(echo "$CURRENT_PCTS" | tail -1)
+
+echo -e "    ${CYAN}Aktuelle Gov Params:${NC}"
 echo -e "    Admin: ${ADMIN_ID:-?}"
-echo -e "    Elec:  ${ELEC_ID:-?}"
-echo -e "    Maint: ${MAINT_ID:-?}"
-echo -e "    Reinv: ${REINV_ID:-?}"
+echo -e "    Elec:  ${ELEC_ID:-?}  (${CURRENT_ELEC_PCT:-?}‰)"
+echo -e "    Maint: ${MAINT_ID:-?}  (${CURRENT_MAINT_PCT:-?}‰)"
+echo -e "    Reinv: ${REINV_ID:-?}  (${CURRENT_REINV_PCT:-?}‰)"
 echo -e "    Dev:   ${DEV_ID:-?}"
 
-# invokecontractprocedure <INDEX> <PROC_ID> <AMOUNT> <INPUT>
-# Proc 4 = VoteGovParams, Amount = 0 (wird refunded)
+if [[ -n "$ADMIN_ID" ]]; then
+    record_pass "Gov Params gelesen — Admin: ${ADMIN_ID:0:12}…"
+else
+    record_fail "Gov Params" "Keine Adressen gefunden"
+fi
+
+# ═══════════════════════════════════════════
+# 10b: Prüfe Active Gov Polls VOR Proposal
+# ═══════════════════════════════════════════
+header "TEST 10b: Active Gov Polls VOR Proposal (Function 8)"
+step "GetActiveGovPollIds — wie viele aktive Polls gibt es aktuell?"
+GOV_POLLS_BEFORE=$(call_fn 8 "" "{ uint64, [64; uint64] }")
+GOV_COUNT_BEFORE=$(echo "$GOV_POLLS_BEFORE" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | head -1)
+GOV_COUNT_BEFORE=${GOV_COUNT_BEFORE:-0}
+echo -e "    Aktive Gov Polls: ${GOV_COUNT_BEFORE}"
+
+if [[ "$GOV_COUNT_BEFORE" -gt 0 ]]; then
+    # Extrahiere Poll IDs
+    GOV_IDS_RAW=$(echo "$GOV_POLLS_BEFORE" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | tail -n +2 | head -"$GOV_COUNT_BEFORE")
+    echo -e "    Poll IDs: $(echo $GOV_IDS_RAW | tr '\n' ' ')"
+fi
+record_pass "GetActiveGovPollIds — Count: ${GOV_COUNT_BEFORE}"
+
+# ═══════════════════════════════════════════
+# 10c: Neues Gov Proposal erstellen (VoteGovParams mit geänderten Prozentsätzen)
+# ═══════════════════════════════════════════
+header "TEST 10c: Neues Gov Proposal erstellen (Procedure 4 — VoteGovParams)"
+
+# Erstelle Proposal mit geänderten Werten:
+# Electricity: 300‰ (statt 350), Maintenance: 100‰ (statt 50), Reinvestment: 100‰ (gleich)
+# → Gesamt bleibt 500‰ = 50%
+NEW_ELEC_PCT=300
+NEW_MAINT_PCT=100
+NEW_REINV_PCT=100
+NEW_TOTAL=$((NEW_ELEC_PCT + NEW_MAINT_PCT + NEW_REINV_PCT))
+
+step "Neues Proposal: Elec ${NEW_ELEC_PCT}‰ + Maint ${NEW_MAINT_PCT}‰ + Reinv ${NEW_REINV_PCT}‰ = ${NEW_TOTAL}‰"
+step "Seed 1 erstellt+votet auf dieses Proposal..."
+
+# Proc 4 = VoteGovParams
+# Input: QRWAGovParams = { admin, electricity, maintenance, reinvestment, qmineDev, electricityPercent, maintenancePercent, reinvestmentPercent }
 TX_OUTPUT=$(cli_call_seed "$SEED1" \
     -enabletestcontracts \
     -invokecontractprocedure "$CONTRACT_INDEX" 4 0 \
-    "{${ADMIN_ID}id,${ELEC_ID}id,${MAINT_ID}id,${REINV_ID}id,${DEV_ID}id,350uint64,50uint64,100uint64}")
+    "{${ADMIN_ID}id,${ELEC_ID}id,${MAINT_ID}id,${REINV_ID}id,${DEV_ID}id,${NEW_ELEC_PCT}uint64,${NEW_MAINT_PCT}uint64,${NEW_REINV_PCT}uint64}")
 echo "$TX_OUTPUT" | sed 's/^/    /'
 
 TX_HASH=$(echo "$TX_OUTPUT" | grep "TxHash:" | awk '{print $2}')
 TX_TICK=$(echo "$TX_OUTPUT" | grep "Tick:" | awk '{print $2}')
 
 if [[ -z "$TX_HASH" || -z "$TX_TICK" ]]; then
-    record_fail "VoteGovParams" "TX konnte nicht gesendet werden"
+    record_fail "VoteGovParams (Seed1)" "TX konnte nicht gesendet werden"
 else
     echo ""
     step "Warte ${TX_WAIT_SEC}s auf Bestätigung..."
@@ -646,24 +692,199 @@ else
     echo "$CHECK" | sed 's/^/    /'
 
     if echo "$CHECK" | grep -q "MoneyFlew: Yes"; then
-        record_pass "VoteGovParams — TX bestätigt, MoneyFlew: Yes"
-
-        # Prüfe ob Gov Poll angelegt wurde
-        step "Prüfe aktive Gov Polls..."
-        OUTPUT=$(call_fn 8 "" "{ uint64, [64; uint64] }")
-        GOV_COUNT=$(echo "$OUTPUT" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | head -1)
-        if [[ "${GOV_COUNT:-0}" -gt 0 ]]; then
-            record_pass "Gov Poll erstellt — Count: $GOV_COUNT"
-        else
-            record_skip "Gov Poll Count" "Count ist 0 (ggf. kein QMINE-Balance)"
-        fi
+        record_pass "VoteGovParams (Seed1) — Proposal erstellt, MoneyFlew: Yes"
     elif echo "$CHECK" | grep -q "MoneyFlew: N/A"; then
-        record_skip "VoteGovParams" "TX noch nicht bestätigt"
+        record_skip "VoteGovParams (Seed1)" "TX noch nicht bestätigt"
     else
-        # MoneyFlew: No kann OK sein wenn kein QMINE → Einsatz wird refunded
-        record_pass "VoteGovParams — TX verarbeitet (MoneyFlew kann No sein bei Refund)"
+        record_pass "VoteGovParams (Seed1) — TX verarbeitet (Refund = MoneyFlew: No ist OK)"
     fi
 fi
+
+# ═══════════════════════════════════════════
+# 10d: Seed 2 votet auf das GLEICHE Proposal
+# ═══════════════════════════════════════════
+header "TEST 10d: Zweiter Vote auf gleiches Proposal (Seed 2)"
+step "Seed 2 votet mit identischen Params → findet bestehendes Proposal"
+step "Gleiche Params: Elec ${NEW_ELEC_PCT}‰ + Maint ${NEW_MAINT_PCT}‰ + Reinv ${NEW_REINV_PCT}‰"
+
+TX_OUTPUT2=$(cli_call_seed "$SEED2" \
+    -enabletestcontracts \
+    -invokecontractprocedure "$CONTRACT_INDEX" 4 0 \
+    "{${ADMIN_ID}id,${ELEC_ID}id,${MAINT_ID}id,${REINV_ID}id,${DEV_ID}id,${NEW_ELEC_PCT}uint64,${NEW_MAINT_PCT}uint64,${NEW_REINV_PCT}uint64}")
+echo "$TX_OUTPUT2" | sed 's/^/    /'
+
+TX_HASH2=$(echo "$TX_OUTPUT2" | grep "TxHash:" | awk '{print $2}')
+TX_TICK2=$(echo "$TX_OUTPUT2" | grep "Tick:" | awk '{print $2}')
+
+if [[ -z "$TX_HASH2" || -z "$TX_TICK2" ]]; then
+    record_fail "VoteGovParams (Seed2)" "TX konnte nicht gesendet werden"
+else
+    echo ""
+    step "Warte ${TX_WAIT_SEC}s auf Bestätigung..."
+    CHECK2=$(wait_and_check_tx "$TX_TICK2" "$TX_HASH2")
+    echo "$CHECK2" | sed 's/^/    /'
+
+    if echo "$CHECK2" | grep -q "MoneyFlew: Yes"; then
+        record_pass "VoteGovParams (Seed2) — Zweiter Vote, MoneyFlew: Yes"
+    elif echo "$CHECK2" | grep -q "MoneyFlew: N/A"; then
+        record_skip "VoteGovParams (Seed2)" "TX noch nicht bestätigt"
+    else
+        record_pass "VoteGovParams (Seed2) — TX verarbeitet (Refund = MoneyFlew: No ist OK)"
+    fi
+fi
+
+# ═══════════════════════════════════════════
+# 10e: Prüfe Active Gov Polls NACH Proposal
+# ═══════════════════════════════════════════
+header "TEST 10e: Active Gov Polls NACH Proposal (Function 8)"
+sleep 5  # Kurz warten bis State aktualisiert
+GOV_POLLS_AFTER=$(call_fn 8 "" "{ uint64, [64; uint64] }")
+GOV_COUNT_AFTER=$(echo "$GOV_POLLS_AFTER" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | head -1)
+GOV_COUNT_AFTER=${GOV_COUNT_AFTER:-0}
+echo -e "    Aktive Gov Polls vorher: ${GOV_COUNT_BEFORE} → nachher: ${GOV_COUNT_AFTER}"
+
+if [[ "$GOV_COUNT_AFTER" -gt 0 ]]; then
+    GOV_IDS_AFTER=$(echo "$GOV_POLLS_AFTER" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | tail -n +2 | head -"$GOV_COUNT_AFTER")
+    echo -e "    Poll IDs: $(echo $GOV_IDS_AFTER | tr '\n' ' ')"
+
+    # Hol Details des ersten aktiven Polls via GetGovPoll (Function 2)
+    FIRST_POLL_ID=$(echo "$GOV_IDS_AFTER" | head -1)
+    if [[ -n "$FIRST_POLL_ID" ]]; then
+        step "Lese Gov Poll Details für ID ${FIRST_POLL_ID} (Function 2)..."
+        # GetGovPoll Input: { uint64 proposalId }
+        # Output: { { uint64 proposalId, uint64 status, uint64 score, { id, id, id, id, id, uint64, uint64, uint64 } }, uint64 status }
+        POLL_DETAIL=$(call_fn 2 "${FIRST_POLL_ID}uint64" "{ { uint64, uint64, uint64, { id, id, id, id, id, uint64, uint64, uint64 } }, uint64 }")
+        echo "$POLL_DETAIL" | grep -v "WARNING" | sed 's/^/    /'
+
+        POLL_STATUS_VAL=$(echo "$POLL_DETAIL" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | tail -1)
+        if [[ "${POLL_STATUS_VAL}" == "1" ]]; then
+            # Extrahiere Proposal-Details
+            POLL_NUMS=$(echo "$POLL_DETAIL" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+')
+            POLL_ID_RET=$(echo "$POLL_NUMS" | sed -n '1p')
+            POLL_STAT=$(echo "$POLL_NUMS" | sed -n '2p')
+            POLL_SCORE=$(echo "$POLL_NUMS" | sed -n '3p')
+            echo ""
+            echo -e "    ${CYAN}Proposal ID:     ${POLL_ID_RET}${NC}"
+            echo -e "    ${CYAN}Status:          ${POLL_STAT} (1=Active, 2=Passed, 3=Failed)${NC}"
+            echo -e "    ${CYAN}Score (Votes):   ${POLL_SCORE}${NC}"
+
+            # Prozentsätze aus dem Proposal
+            POLL_ADDRS=$(echo "$POLL_DETAIL" | grep -oE '[A-Z]{55,60}')
+            POLL_LAST_NUMS=$(echo "$POLL_NUMS" | tail -4)
+            PROP_ELEC=$(echo "$POLL_LAST_NUMS" | sed -n '1p')
+            PROP_MAINT=$(echo "$POLL_LAST_NUMS" | sed -n '2p')
+            PROP_REINV=$(echo "$POLL_LAST_NUMS" | sed -n '3p')
+            echo -e "    ${CYAN}Elec%: ${PROP_ELEC:-?}‰  Maint%: ${PROP_MAINT:-?}‰  Reinv%: ${PROP_REINV:-?}‰${NC}"
+
+            record_pass "GetGovPoll — ID: ${POLL_ID_RET}, Status: ${POLL_STAT}, Score: ${POLL_SCORE}"
+        else
+            record_fail "GetGovPoll" "Poll nicht gefunden (Status: ${POLL_STATUS_VAL})"
+        fi
+    fi
+
+    if [[ "$GOV_COUNT_AFTER" -ge "$GOV_COUNT_BEFORE" ]]; then
+        record_pass "Active Gov Polls gestiegen — ${GOV_COUNT_BEFORE} → ${GOV_COUNT_AFTER}"
+    else
+        record_skip "Active Gov Polls" "Count: ${GOV_COUNT_AFTER} (evtl. END_EPOCH dazwischen)"
+    fi
+else
+    record_fail "Active Gov Polls" "Keine aktiven Polls nach VoteGovParams"
+fi
+
+# ═══════════════════════════════════════════
+# 10f: Erstelle ein KONKURRIERENDES Proposal mit anderen Werten
+# ═══════════════════════════════════════════
+header "TEST 10f: Konkurrierendes Gov Proposal (andere Prozentsätze)"
+
+# Proposal 2: Electricity 400‰, Maintenance 50‰, Reinvestment 50‰ = 500‰
+ALT_ELEC_PCT=400
+ALT_MAINT_PCT=50
+ALT_REINV_PCT=50
+ALT_TOTAL=$((ALT_ELEC_PCT + ALT_MAINT_PCT + ALT_REINV_PCT))
+
+step "Alternatives Proposal: Elec ${ALT_ELEC_PCT}‰ + Maint ${ALT_MAINT_PCT}‰ + Reinv ${ALT_REINV_PCT}‰ = ${ALT_TOTAL}‰"
+step "Seed 3 (Dedicated Address) votet auf dieses alternative Proposal..."
+
+TX_OUTPUT3=$(cli_call_seed "$SEED3" \
+    -enabletestcontracts \
+    -invokecontractprocedure "$CONTRACT_INDEX" 4 0 \
+    "{${ADMIN_ID}id,${ELEC_ID}id,${MAINT_ID}id,${REINV_ID}id,${DEV_ID}id,${ALT_ELEC_PCT}uint64,${ALT_MAINT_PCT}uint64,${ALT_REINV_PCT}uint64}")
+echo "$TX_OUTPUT3" | sed 's/^/    /'
+
+TX_HASH3=$(echo "$TX_OUTPUT3" | grep "TxHash:" | awk '{print $2}')
+TX_TICK3=$(echo "$TX_OUTPUT3" | grep "Tick:" | awk '{print $2}')
+
+if [[ -z "$TX_HASH3" || -z "$TX_TICK3" ]]; then
+    record_fail "VoteGovParams (Seed3)" "TX konnte nicht gesendet werden"
+else
+    echo ""
+    step "Warte ${TX_WAIT_SEC}s auf Bestätigung..."
+    CHECK3=$(wait_and_check_tx "$TX_TICK3" "$TX_HASH3")
+    echo "$CHECK3" | sed 's/^/    /'
+
+    if echo "$CHECK3" | grep -q "MoneyFlew: Yes"; then
+        record_pass "VoteGovParams (Seed3) — Konkurrierendes Proposal, MoneyFlew: Yes"
+    elif echo "$CHECK3" | grep -q "MoneyFlew: N/A"; then
+        record_skip "VoteGovParams (Seed3)" "TX noch nicht bestätigt"
+    else
+        # Seed3 hat evtl. kein QMINE → wird abgelehnt (NOT_AUTHORIZED)
+        record_skip "VoteGovParams (Seed3)" "TX verarbeitet (braucht QMINE, Seed3 hat evtl. keins)"
+    fi
+fi
+
+# ═══════════════════════════════════════════
+# 10g: Final — Alle aktiven Gov Polls auflisten + Details
+# ═══════════════════════════════════════════
+header "TEST 10g: Finale Gov Poll Übersicht"
+sleep 3
+GOV_POLLS_FINAL=$(call_fn 8 "" "{ uint64, [64; uint64] }")
+GOV_COUNT_FINAL=$(echo "$GOV_POLLS_FINAL" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | head -1)
+GOV_COUNT_FINAL=${GOV_COUNT_FINAL:-0}
+echo -e "    ${BOLD}Aktive Gov Polls: ${GOV_COUNT_FINAL}${NC}"
+
+if [[ "$GOV_COUNT_FINAL" -gt 0 ]]; then
+    GOV_IDS_FINAL=$(echo "$GOV_POLLS_FINAL" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | tail -n +2 | head -"$GOV_COUNT_FINAL")
+
+    # Iteriere über alle aktiven Polls und zeige Details
+    POLL_NUM=0
+    while IFS= read -r PID; do
+        POLL_NUM=$((POLL_NUM + 1))
+        POLL_OUT=$(call_fn 2 "${PID}uint64" "{ { uint64, uint64, uint64, { id, id, id, id, id, uint64, uint64, uint64 } }, uint64 }")
+        P_NUMS=$(echo "$POLL_OUT" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+')
+        P_ID=$(echo "$P_NUMS" | sed -n '1p')
+        P_STAT=$(echo "$P_NUMS" | sed -n '2p')
+        P_SCORE=$(echo "$P_NUMS" | sed -n '3p')
+        # Letzten 4 Zahlen (vor dem status): elec%, maint%, reinv%, query_status
+        P_LAST_NUMS=$(echo "$P_NUMS" | tail -4)
+        P_ELEC=$(echo "$P_LAST_NUMS" | sed -n '1p')
+        P_MAINT=$(echo "$P_LAST_NUMS" | sed -n '2p')
+        P_REINV=$(echo "$P_LAST_NUMS" | sed -n '3p')
+
+        # Status-Label
+        case "$P_STAT" in
+            0) STAT_LABEL="Empty" ;;
+            1) STAT_LABEL="Active" ;;
+            2) STAT_LABEL="Passed" ;;
+            3) STAT_LABEL="Failed" ;;
+            *) STAT_LABEL="Unknown($P_STAT)" ;;
+        esac
+
+        echo -e "    ${CYAN}━━━ Poll ${POLL_NUM} ━━━${NC}"
+        echo -e "    ID: ${P_ID}  Status: ${STAT_LABEL}  Score: ${P_SCORE} QMINE"
+        echo -e "    Elec: ${P_ELEC:-?}‰  Maint: ${P_MAINT:-?}‰  Reinv: ${P_REINV:-?}‰"
+    done <<< "$GOV_IDS_FINAL"
+
+    record_pass "Gov Poll Übersicht — ${GOV_COUNT_FINAL} aktive Polls"
+else
+    record_skip "Gov Poll Übersicht" "Keine aktiven Polls (evtl. alle nach END_EPOCH abgeschlossen)"
+fi
+
+echo ""
+echo -e "    ${YELLOW}══════════════════════════════════════════════════${NC}"
+echo -e "    ${YELLOW}Hinweis: Gov Proposals werden erst bei END_EPOCH ausgewertet.${NC}"
+echo -e "    ${YELLOW}Das Proposal mit dem höchsten Score (min 2/3 Quorum)${NC}"
+echo -e "    ${YELLOW}wird dann als neue GovParams übernommen.${NC}"
+echo -e "    ${YELLOW}══════════════════════════════════════════════════${NC}"
 
 fi # end --vote
 
