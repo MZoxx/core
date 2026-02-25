@@ -959,6 +959,8 @@ public:
         uint64 revenuePoolB;
         uint64 qmineDividendPool;
         uint64 qrwaDividendPool;
+        uint64 dedicatedRevenuePool;
+        uint64 dedicatedQRWADividendPool;
     };
     PUBLIC_FUNCTION(GetDividendBalances)
     {
@@ -966,6 +968,8 @@ public:
         output.revenuePoolB = state.mRevenuePoolB;
         output.qmineDividendPool = state.mQmineDividendPool;
         output.qrwaDividendPool = state.mQRWADividendPool;
+        output.dedicatedRevenuePool = state.mDedicatedRevenuePool;
+        output.dedicatedQRWADividendPool = state.mDedicatedQRWADividendPool;
     }
 
     struct GetTotalDistributed_input {};
