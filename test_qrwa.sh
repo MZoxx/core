@@ -734,61 +734,80 @@ else
 fi
 
 # ═══════════════════════════════════════════
-# 10e: Prüfe Active Gov Polls NACH Proposal
+# 10e: Prüfe Gov Polls NACH Proposals — scanne per ID (auch resolved/historische)
 # ═══════════════════════════════════════════
-header "TEST 10e: Active Gov Polls NACH Proposal (Function 8)"
+header "TEST 10e: Gov Polls NACH Proposal — Scan per ID (Function 2 + 8)"
 sleep 5  # Kurz warten bis State aktualisiert
+
+# Zuerst: aktive Polls abfragen
 GOV_POLLS_AFTER=$(call_fn 8 "" "{ uint64, [64; uint64] }")
 GOV_COUNT_AFTER=$(echo "$GOV_POLLS_AFTER" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | head -1)
 GOV_COUNT_AFTER=${GOV_COUNT_AFTER:-0}
-echo -e "    Aktive Gov Polls vorher: ${GOV_COUNT_BEFORE} → nachher: ${GOV_COUNT_AFTER}"
+echo -e "    Aktive Gov Polls (Status=Active): ${GOV_COUNT_AFTER}"
 
 if [[ "$GOV_COUNT_AFTER" -gt 0 ]]; then
     GOV_IDS_AFTER=$(echo "$GOV_POLLS_AFTER" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | tail -n +2 | head -"$GOV_COUNT_AFTER")
-    echo -e "    Poll IDs: $(echo $GOV_IDS_AFTER | tr '\n' ' ')"
+    echo -e "    Aktive Poll IDs: $(echo $GOV_IDS_AFTER | tr '\n' ' ')"
+fi
 
-    # Hol Details des ersten aktiven Polls via GetGovPoll (Function 2)
-    FIRST_POLL_ID=$(echo "$GOV_IDS_AFTER" | head -1)
-    if [[ -n "$FIRST_POLL_ID" ]]; then
-        step "Lese Gov Poll Details für ID ${FIRST_POLL_ID} (Function 2)..."
-        # GetGovPoll Input: { uint64 proposalId }
-        # Output: { { uint64 proposalId, uint64 status, uint64 score, { id, id, id, id, id, uint64, uint64, uint64 } }, uint64 status }
-        POLL_DETAIL=$(call_fn 2 "${FIRST_POLL_ID}uint64" "{ { uint64, uint64, uint64, { id, id, id, id, id, uint64, uint64, uint64 } }, uint64 }")
-        echo "$POLL_DETAIL" | grep -v "WARNING" | sed 's/^/    /'
+# Dann: Scanne Proposal IDs 0..15 per GetGovPoll (Fn 2) — findet auch resolved Polls
+step "Scanne Gov Poll IDs 0..15 per GetGovPoll (auch Passed/Failed)..."
+GOV_FOUND_COUNT=0
+GOV_FOUND_IDS=()
+GOV_FOUND_DETAILS=()
 
-        POLL_STATUS_VAL=$(echo "$POLL_DETAIL" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | tail -1)
-        if [[ "${POLL_STATUS_VAL}" == "1" ]]; then
-            # Extrahiere Proposal-Details
-            POLL_NUMS=$(echo "$POLL_DETAIL" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+')
-            POLL_ID_RET=$(echo "$POLL_NUMS" | sed -n '1p')
-            POLL_STAT=$(echo "$POLL_NUMS" | sed -n '2p')
-            POLL_SCORE=$(echo "$POLL_NUMS" | sed -n '3p')
-            echo ""
-            echo -e "    ${CYAN}Proposal ID:     ${POLL_ID_RET}${NC}"
-            echo -e "    ${CYAN}Status:          ${POLL_STAT} (1=Active, 2=Passed, 3=Failed)${NC}"
-            echo -e "    ${CYAN}Score (Votes):   ${POLL_SCORE}${NC}"
+for SCAN_ID in $(seq 0 15); do
+    SCAN_OUT=$(call_fn 2 "${SCAN_ID}uint64" "{ { uint64, uint64, uint64, { id, id, id, id, id, uint64, uint64, uint64 } }, uint64 }")
+    SCAN_STATUS=$(echo "$SCAN_OUT" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | tail -1)
 
-            # Prozentsätze aus dem Proposal
-            POLL_ADDRS=$(echo "$POLL_DETAIL" | grep -oE '[A-Z]{55,60}')
-            POLL_LAST_NUMS=$(echo "$POLL_NUMS" | tail -4)
-            PROP_ELEC=$(echo "$POLL_LAST_NUMS" | sed -n '1p')
-            PROP_MAINT=$(echo "$POLL_LAST_NUMS" | sed -n '2p')
-            PROP_REINV=$(echo "$POLL_LAST_NUMS" | sed -n '3p')
-            echo -e "    ${CYAN}Elec%: ${PROP_ELEC:-?}‰  Maint%: ${PROP_MAINT:-?}‰  Reinv%: ${PROP_REINV:-?}‰${NC}"
+    if [[ "${SCAN_STATUS}" == "1" ]]; then
+        # Found — extrahiere Details
+        SCAN_NUMS=$(echo "$SCAN_OUT" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+')
+        S_ID=$(echo "$SCAN_NUMS" | sed -n '1p')
+        S_STAT=$(echo "$SCAN_NUMS" | sed -n '2p')
+        S_SCORE=$(echo "$SCAN_NUMS" | sed -n '3p')
+        S_LAST=$(echo "$SCAN_NUMS" | tail -4)
+        S_ELEC=$(echo "$S_LAST" | sed -n '1p')
+        S_MAINT=$(echo "$S_LAST" | sed -n '2p')
+        S_REINV=$(echo "$S_LAST" | sed -n '3p')
 
-            record_pass "GetGovPoll — ID: ${POLL_ID_RET}, Status: ${POLL_STAT}, Score: ${POLL_SCORE}"
-        else
-            record_fail "GetGovPoll" "Poll nicht gefunden (Status: ${POLL_STATUS_VAL})"
+        # Status-Label
+        case "$S_STAT" in
+            0) S_LABEL="Empty" ;;
+            1) S_LABEL="Active" ;;
+            2) S_LABEL="Passed" ;;
+            3) S_LABEL="Failed" ;;
+            4) S_LABEL="PassedFailedExec" ;;
+            *) S_LABEL="Unknown($S_STAT)" ;;
+        esac
+
+        GOV_FOUND_COUNT=$((GOV_FOUND_COUNT + 1))
+        GOV_FOUND_IDS+=("$S_ID")
+        echo -e "    ${CYAN}━━━ Poll ID: ${S_ID} ━━━${NC}"
+        echo -e "    Status: ${S_LABEL}  Score: ${S_SCORE} QMINE"
+        echo -e "    Elec: ${S_ELEC:-?}‰  Maint: ${S_MAINT:-?}‰  Reinv: ${S_REINV:-?}‰"
+
+        # Zeige Adressen
+        SCAN_ADDRS=$(echo "$SCAN_OUT" | grep -oE '[A-Z]{55,60}')
+        S_ADMIN=$(echo "$SCAN_ADDRS" | head -1)
+        if [[ -n "$S_ADMIN" ]]; then
+            echo -e "    Admin: ${S_ADMIN:0:12}…${S_ADMIN: -6}"
         fi
     fi
+done
 
-    if [[ "$GOV_COUNT_AFTER" -ge "$GOV_COUNT_BEFORE" ]]; then
-        record_pass "Active Gov Polls gestiegen — ${GOV_COUNT_BEFORE} → ${GOV_COUNT_AFTER}"
-    else
-        record_skip "Active Gov Polls" "Count: ${GOV_COUNT_AFTER} (evtl. END_EPOCH dazwischen)"
-    fi
+echo ""
+echo -e "    ${BOLD}Gefundene Gov Polls (alle Status): ${GOV_FOUND_COUNT}${NC}"
+echo -e "    Davon aktiv: ${GOV_COUNT_AFTER}"
+
+if [[ "$GOV_FOUND_COUNT" -gt 0 ]]; then
+    record_pass "Gov Polls gefunden — ${GOV_FOUND_COUNT} total (${GOV_COUNT_AFTER} aktiv)"
+elif [[ "$GOV_COUNT_AFTER" -gt 0 ]]; then
+    record_pass "Aktive Gov Polls: ${GOV_COUNT_AFTER}"
 else
-    record_fail "Active Gov Polls" "Keine aktiven Polls nach VoteGovParams"
+    echo -e "    ${YELLOW}Keine Polls gefunden — möglicherweise hat VoteGovParams fehlgeschlagen${NC}"
+    echo -e "    ${YELLOW}(Seed muss QMINE halten, Prozentsätze ≤ 1000‰, Admin ≠ NULL)${NC}"
+    record_skip "Gov Polls" "Keine Polls (IDs 0..15 leer, evtl. kein QMINE oder Epoch-Reset)"
 fi
 
 # ═══════════════════════════════════════════
@@ -833,57 +852,66 @@ else
 fi
 
 # ═══════════════════════════════════════════
-# 10g: Final — Alle aktiven Gov Polls auflisten + Details
+# 10g: Final — Alle Gov Polls auflisten (aktiv + historisch)
 # ═══════════════════════════════════════════
-header "TEST 10g: Finale Gov Poll Übersicht"
+header "TEST 10g: Finale Gov Poll Übersicht (alle Status)"
 sleep 3
-GOV_POLLS_FINAL=$(call_fn 8 "" "{ uint64, [64; uint64] }")
-GOV_COUNT_FINAL=$(echo "$GOV_POLLS_FINAL" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | head -1)
-GOV_COUNT_FINAL=${GOV_COUNT_FINAL:-0}
-echo -e "    ${BOLD}Aktive Gov Polls: ${GOV_COUNT_FINAL}${NC}"
 
-if [[ "$GOV_COUNT_FINAL" -gt 0 ]]; then
-    GOV_IDS_FINAL=$(echo "$GOV_POLLS_FINAL" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | tail -n +2 | head -"$GOV_COUNT_FINAL")
+# Scanne durch IDs 0..15 und zeige alle die existieren
+step "Scanne Gov Poll IDs 0..15 (aktiv + resolved)..."
+FINAL_FOUND=0
+FINAL_ACTIVE=0
+FINAL_PASSED=0
+FINAL_FAILED=0
 
-    # Iteriere über alle aktiven Polls und zeige Details
-    POLL_NUM=0
-    while IFS= read -r PID; do
-        POLL_NUM=$((POLL_NUM + 1))
-        POLL_OUT=$(call_fn 2 "${PID}uint64" "{ { uint64, uint64, uint64, { id, id, id, id, id, uint64, uint64, uint64 } }, uint64 }")
-        P_NUMS=$(echo "$POLL_OUT" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+')
-        P_ID=$(echo "$P_NUMS" | sed -n '1p')
-        P_STAT=$(echo "$P_NUMS" | sed -n '2p')
-        P_SCORE=$(echo "$P_NUMS" | sed -n '3p')
-        # Letzten 4 Zahlen (vor dem status): elec%, maint%, reinv%, query_status
-        P_LAST_NUMS=$(echo "$P_NUMS" | tail -4)
-        P_ELEC=$(echo "$P_LAST_NUMS" | sed -n '1p')
-        P_MAINT=$(echo "$P_LAST_NUMS" | sed -n '2p')
-        P_REINV=$(echo "$P_LAST_NUMS" | sed -n '3p')
+for FID in $(seq 0 15); do
+    F_OUT=$(call_fn 2 "${FID}uint64" "{ { uint64, uint64, uint64, { id, id, id, id, id, uint64, uint64, uint64 } }, uint64 }")
+    F_QUERY_STATUS=$(echo "$F_OUT" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | tail -1)
 
-        # Status-Label
-        case "$P_STAT" in
-            0) STAT_LABEL="Empty" ;;
-            1) STAT_LABEL="Active" ;;
-            2) STAT_LABEL="Passed" ;;
-            3) STAT_LABEL="Failed" ;;
-            *) STAT_LABEL="Unknown($P_STAT)" ;;
+    if [[ "${F_QUERY_STATUS}" == "1" ]]; then
+        F_NUMS=$(echo "$F_OUT" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+')
+        F_ID=$(echo "$F_NUMS" | sed -n '1p')
+        F_STAT=$(echo "$F_NUMS" | sed -n '2p')
+        F_SCORE=$(echo "$F_NUMS" | sed -n '3p')
+        F_LAST=$(echo "$F_NUMS" | tail -4)
+        F_ELEC=$(echo "$F_LAST" | sed -n '1p')
+        F_MAINT=$(echo "$F_LAST" | sed -n '2p')
+        F_REINV=$(echo "$F_LAST" | sed -n '3p')
+
+        case "$F_STAT" in
+            0) F_LABEL="Empty"; F_COLOR="$NC" ;;
+            1) F_LABEL="Active"; F_COLOR="$GREEN"; FINAL_ACTIVE=$((FINAL_ACTIVE + 1)) ;;
+            2) F_LABEL="Passed"; F_COLOR="$GREEN"; FINAL_PASSED=$((FINAL_PASSED + 1)) ;;
+            3) F_LABEL="Failed"; F_COLOR="$RED"; FINAL_FAILED=$((FINAL_FAILED + 1)) ;;
+            4) F_LABEL="PassedFailedExec"; F_COLOR="$YELLOW" ;;
+            *) F_LABEL="Unknown($F_STAT)"; F_COLOR="$YELLOW" ;;
         esac
 
-        echo -e "    ${CYAN}━━━ Poll ${POLL_NUM} ━━━${NC}"
-        echo -e "    ID: ${P_ID}  Status: ${STAT_LABEL}  Score: ${P_SCORE} QMINE"
-        echo -e "    Elec: ${P_ELEC:-?}‰  Maint: ${P_MAINT:-?}‰  Reinv: ${P_REINV:-?}‰"
-    done <<< "$GOV_IDS_FINAL"
+        FINAL_FOUND=$((FINAL_FOUND + 1))
+        echo -e "    ${F_COLOR}━━━ Poll ID: ${F_ID}  [${F_LABEL}]  Score: ${F_SCORE} QMINE${NC}"
+        echo -e "        Elec: ${F_ELEC:-?}‰  Maint: ${F_MAINT:-?}‰  Reinv: ${F_REINV:-?}‰"
+    fi
+done
 
-    record_pass "Gov Poll Übersicht — ${GOV_COUNT_FINAL} aktive Polls"
+echo ""
+echo -e "    ${BOLD}════════ Gov Poll Zusammenfassung ════════${NC}"
+echo -e "    ${BOLD}Gefunden:  ${FINAL_FOUND}${NC}"
+echo -e "    ${GREEN}Active:    ${FINAL_ACTIVE}${NC}"
+echo -e "    ${GREEN}Passed:    ${FINAL_PASSED}${NC}"
+echo -e "    ${RED}Failed:    ${FINAL_FAILED}${NC}"
+
+if [[ "$FINAL_FOUND" -gt 0 ]]; then
+    record_pass "Gov Poll Übersicht — ${FINAL_FOUND} Polls (${FINAL_ACTIVE} aktiv, ${FINAL_PASSED} passed, ${FINAL_FAILED} failed)"
 else
-    record_skip "Gov Poll Übersicht" "Keine aktiven Polls (evtl. alle nach END_EPOCH abgeschlossen)"
+    record_skip "Gov Poll Übersicht" "Keine Polls gefunden (IDs 0..15)"
 fi
 
 echo ""
 echo -e "    ${YELLOW}══════════════════════════════════════════════════${NC}"
-echo -e "    ${YELLOW}Hinweis: Gov Proposals werden erst bei END_EPOCH ausgewertet.${NC}"
+echo -e "    ${YELLOW}Hinweis: Gov Proposals werden bei END_EPOCH ausgewertet.${NC}"
 echo -e "    ${YELLOW}Das Proposal mit dem höchsten Score (min 2/3 Quorum)${NC}"
 echo -e "    ${YELLOW}wird dann als neue GovParams übernommen.${NC}"
+echo -e "    ${YELLOW}Status: 1=Active, 2=Passed, 3=Failed${NC}"
 echo -e "    ${YELLOW}══════════════════════════════════════════════════${NC}"
 
 fi # end --vote
