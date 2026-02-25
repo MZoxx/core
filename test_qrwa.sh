@@ -608,6 +608,111 @@ fi # end --send
 if [[ "$MODE" == "all" || "$MODE" == "--vote" ]]; then
 
 # ═══════════════════════════════════════════
+# 10-PRE: QMINE Token Vorbereitung (benötigt für VoteGovParams)
+# ═══════════════════════════════════════════
+header "TEST 10-PRE: QMINE Token Vorbereitung"
+step "VoteGovParams erfordert QMINE Tokens — prüfe Balances..."
+
+QMINE_BUY_AMOUNT=100       # Shares pro Seed
+QMINE_BUY_PRICE=5000        # QU pro Share (etwas über Marktpreis)
+QMINE_BUY_COST=$((QMINE_BUY_AMOUNT * QMINE_BUY_PRICE))
+
+# Hilfsfunktion: QMINE Balance für eine Identity prüfen
+check_qmine_balance() {
+    local identity="$1"
+    local assets_out
+    assets_out=$(cli_call -getasset "$identity")
+    # Suche QMINE im Ownership-Block
+    local in_ownership=0
+    local qmine_shares=0
+    while IFS= read -r line; do
+        if echo "$line" | grep -q '======== OWNERSHIP ========'; then
+            in_ownership=1
+        fi
+        if echo "$line" | grep -q '======== POSSESSION ========'; then
+            in_ownership=0
+        fi
+        if [[ "$in_ownership" -eq 1 ]] && echo "$line" | grep -q 'QMINE'; then
+            # Nächste Zeile mit shares
+            local shares_line
+            shares_line=$(echo "$assets_out" | grep -A5 'QMINE' | grep 'number of shares' | head -1)
+            qmine_shares=$(echo "$shares_line" | grep -oE '[0-9]+' | head -1)
+            break
+        fi
+    done <<< "$assets_out"
+    echo "${qmine_shares:-0}"
+}
+
+# Hilfsfunktion: QMINE via QX kaufen (Bid Order)
+buy_qmine_via_qx() {
+    local seed="$1" identity="$2" label="$3"
+    step "${label}: Kaufe ${QMINE_BUY_AMOUNT} QMINE via QX (Bid @ ${QMINE_BUY_PRICE} QU/Share = ${QMINE_BUY_COST} QU)..."
+    local tx_out
+    tx_out=$(cli_call_seed "$seed" \
+        -qxorder add bid "$QMINE_ISSUER" "$QMINE_NAME" "$QMINE_BUY_PRICE" "$QMINE_BUY_AMOUNT")
+    echo "$tx_out" | sed 's/^/    /'
+
+    local tx_hash tx_tick
+    tx_hash=$(echo "$tx_out" | grep "TxHash:" | awk '{print $2}')
+    tx_tick=$(echo "$tx_out" | grep "Tick:" | awk '{print $2}')
+
+    if [[ -z "$tx_hash" || -z "$tx_tick" ]]; then
+        record_fail "QX Buy QMINE (${label})" "TX konnte nicht gesendet werden"
+        return 1
+    fi
+
+    echo ""
+    step "Warte ${TX_WAIT_SEC}s auf Bestätigung..."
+    local check
+    check=$(wait_and_check_tx "$tx_tick" "$tx_hash")
+    echo "$check" | sed 's/^/    /'
+
+    if echo "$check" | grep -q "MoneyFlew: Yes"; then
+        record_pass "QX Buy QMINE (${label}) — ${QMINE_BUY_AMOUNT} Shares gekauft"
+        return 0
+    elif echo "$check" | grep -q "MoneyFlew: N/A"; then
+        record_skip "QX Buy QMINE (${label})" "TX noch nicht bestätigt"
+        return 1
+    else
+        # MoneyFlew: No → Bid Order platziert aber nicht sofort gematcht
+        echo -e "    ${YELLOW}Bid Order platziert, evtl. noch nicht gematcht${NC}"
+        record_skip "QX Buy QMINE (${label})" "Bid platziert, warte auf Match"
+        return 1
+    fi
+}
+
+# Prüfe QMINE Balance für alle Vote-Seeds
+declare -a VOTE_SEEDS=("$SEED1" "$SEED2" "$SEED3")
+declare -a VOTE_IDENTITIES=("$IDENTITY1" "$IDENTITY2" "$DEDICATED_IDENTITY")
+declare -a VOTE_LABELS=("Seed1" "Seed2" "Seed3/Dedicated")
+
+QMINE_ALL_OK=1
+for idx in 0 1 2; do
+    QMINE_BAL=$(check_qmine_balance "${VOTE_IDENTITIES[$idx]}")
+    echo -e "    ${VOTE_LABELS[$idx]} (${VOTE_IDENTITIES[$idx]:0:12}…): ${QMINE_BAL} QMINE"
+
+    if [[ "$QMINE_BAL" -eq 0 ]]; then
+        QMINE_ALL_OK=0
+        buy_qmine_via_qx "${VOTE_SEEDS[$idx]}" "${VOTE_IDENTITIES[$idx]}" "${VOTE_LABELS[$idx]}"
+    else
+        record_pass "QMINE vorhanden (${VOTE_LABELS[$idx]}) — ${QMINE_BAL} Shares"
+    fi
+done
+
+# Kurze Pause und Re-Check falls gekauft
+if [[ "$QMINE_ALL_OK" -eq 0 ]]; then
+    step "Warte 5s, dann Re-Check QMINE Balances..."
+    sleep 5
+    for idx in 0 1 2; do
+        QMINE_BAL=$(check_qmine_balance "${VOTE_IDENTITIES[$idx]}")
+        echo -e "    ${VOTE_LABELS[$idx]}: ${QMINE_BAL} QMINE"
+        if [[ "$QMINE_BAL" -eq 0 ]]; then
+            echo -e "    ${YELLOW}⚠ ${VOTE_LABELS[$idx]} hat immer noch kein QMINE — Gov Votes werden evtl. fehlschlagen${NC}"
+        fi
+    done
+fi
+
+# ═══════════════════════════════════════════
 # 10a: Lese aktuelle GovParams
 # ═══════════════════════════════════════════
 header "TEST 10a: Aktuelle Gov Params lesen (Function 1)"
@@ -758,18 +863,36 @@ GOV_FOUND_DETAILS=()
 
 for SCAN_ID in $(seq 0 15); do
     SCAN_OUT=$(call_fn 2 "${SCAN_ID}uint64" "{ { uint64, uint64, uint64, { id, id, id, id, id, uint64, uint64, uint64 } }, uint64 }")
-    SCAN_STATUS=$(echo "$SCAN_OUT" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | tail -1)
+    SCAN_SECTION=$(echo "$SCAN_OUT" | sed -n '/Contract Function Output/,$ p')
+    SCAN_NUMS=$(echo "$SCAN_SECTION" | grep -oE '[0-9]+')
+    NUM_COUNT=$(echo "$SCAN_NUMS" | grep -c .)
+    QUERY_STATUS=$(echo "$SCAN_NUMS" | tail -1)
 
-    if [[ "${SCAN_STATUS}" == "1" ]]; then
-        # Found — extrahiere Details
-        SCAN_NUMS=$(echo "$SCAN_OUT" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+')
+    if [[ "${QUERY_STATUS}" == "1" && "$NUM_COUNT" -ge 4 ]]; then
+        # Prüfe ob Proposal-Daten vorhanden (nicht nur (empty) + queryStatus)
+        # Bei (empty): nur 1 Zahl (queryStatus); bei echtem Poll: ≥ 4 (id, status, score, qs)
         S_ID=$(echo "$SCAN_NUMS" | sed -n '1p')
         S_STAT=$(echo "$SCAN_NUMS" | sed -n '2p')
         S_SCORE=$(echo "$SCAN_NUMS" | sed -n '3p')
-        S_LAST=$(echo "$SCAN_NUMS" | tail -4)
-        S_ELEC=$(echo "$S_LAST" | sed -n '1p')
-        S_MAINT=$(echo "$S_LAST" | sed -n '2p')
-        S_REINV=$(echo "$S_LAST" | sed -n '3p')
+
+        # Prüfe ob Proposal tatsächlich Daten hat (nicht alles 0 / Geister-Slot)
+        if [[ "$S_ID" == "0" && "$S_STAT" == "0" && "$S_SCORE" == "0" ]]; then
+            # Leerer Slot bei ID 0 (proposalId 0 matched immer Slot 0)
+            continue
+        fi
+
+        # Extrahiere Prozentsätze (falls vorhanden — nur wenn Params nicht (empty))
+        if [[ "$NUM_COUNT" -ge 7 ]]; then
+            # Volle Daten: proposalId, status, score, elec%, maint%, reinv%, queryStatus
+            S_ELEC=$(echo "$SCAN_NUMS" | tail -4 | head -1)
+            S_MAINT=$(echo "$SCAN_NUMS" | tail -3 | head -1)
+            S_REINV=$(echo "$SCAN_NUMS" | tail -2 | head -1)
+        else
+            # Params waren (empty) — nur ID/Status/Score + queryStatus
+            S_ELEC="?"
+            S_MAINT="?"
+            S_REINV="?"
+        fi
 
         # Status-Label
         case "$S_STAT" in
@@ -785,7 +908,7 @@ for SCAN_ID in $(seq 0 15); do
         GOV_FOUND_IDS+=("$S_ID")
         echo -e "    ${CYAN}━━━ Poll ID: ${S_ID} ━━━${NC}"
         echo -e "    Status: ${S_LABEL}  Score: ${S_SCORE} QMINE"
-        echo -e "    Elec: ${S_ELEC:-?}‰  Maint: ${S_MAINT:-?}‰  Reinv: ${S_REINV:-?}‰"
+        echo -e "    Elec: ${S_ELEC}‰  Maint: ${S_MAINT}‰  Reinv: ${S_REINV}‰"
 
         # Zeige Adressen
         SCAN_ADDRS=$(echo "$SCAN_OUT" | grep -oE '[A-Z]{55,60}')
@@ -866,17 +989,31 @@ FINAL_FAILED=0
 
 for FID in $(seq 0 15); do
     F_OUT=$(call_fn 2 "${FID}uint64" "{ { uint64, uint64, uint64, { id, id, id, id, id, uint64, uint64, uint64 } }, uint64 }")
-    F_QUERY_STATUS=$(echo "$F_OUT" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | tail -1)
+    F_SECTION=$(echo "$F_OUT" | sed -n '/Contract Function Output/,$ p')
+    F_NUMS=$(echo "$F_SECTION" | grep -oE '[0-9]+')
+    F_NUM_COUNT=$(echo "$F_NUMS" | grep -c .)
+    F_QUERY_STATUS=$(echo "$F_NUMS" | tail -1)
 
-    if [[ "${F_QUERY_STATUS}" == "1" ]]; then
-        F_NUMS=$(echo "$F_OUT" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+')
+    if [[ "${F_QUERY_STATUS}" == "1" && "$F_NUM_COUNT" -ge 4 ]]; then
         F_ID=$(echo "$F_NUMS" | sed -n '1p')
         F_STAT=$(echo "$F_NUMS" | sed -n '2p')
         F_SCORE=$(echo "$F_NUMS" | sed -n '3p')
-        F_LAST=$(echo "$F_NUMS" | tail -4)
-        F_ELEC=$(echo "$F_LAST" | sed -n '1p')
-        F_MAINT=$(echo "$F_LAST" | sed -n '2p')
-        F_REINV=$(echo "$F_LAST" | sed -n '3p')
+
+        # Leeren Slot überspringen (proposalId 0 matched immer Slot 0)
+        if [[ "$F_ID" == "0" && "$F_STAT" == "0" && "$F_SCORE" == "0" ]]; then
+            continue
+        fi
+
+        # Extrahiere Prozentsätze (falls Params nicht (empty))
+        if [[ "$F_NUM_COUNT" -ge 7 ]]; then
+            F_ELEC=$(echo "$F_NUMS" | tail -4 | head -1)
+            F_MAINT=$(echo "$F_NUMS" | tail -3 | head -1)
+            F_REINV=$(echo "$F_NUMS" | tail -2 | head -1)
+        else
+            F_ELEC="?"
+            F_MAINT="?"
+            F_REINV="?"
+        fi
 
         case "$F_STAT" in
             0) F_LABEL="Empty"; F_COLOR="$NC" ;;
@@ -889,7 +1026,7 @@ for FID in $(seq 0 15); do
 
         FINAL_FOUND=$((FINAL_FOUND + 1))
         echo -e "    ${F_COLOR}━━━ Poll ID: ${F_ID}  [${F_LABEL}]  Score: ${F_SCORE} QMINE${NC}"
-        echo -e "        Elec: ${F_ELEC:-?}‰  Maint: ${F_MAINT:-?}‰  Reinv: ${F_REINV:-?}‰"
+        echo -e "        Elec: ${F_ELEC}‰  Maint: ${F_MAINT}‰  Reinv: ${F_REINV}‰"
     fi
 done
 
