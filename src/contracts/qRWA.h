@@ -23,7 +23,7 @@ constexpr uint64 QRWA_CONTRACT_ASSET_NAME = 1096241745ULL; // assetNameFromStrin
 constexpr uint64 QRWA_PAYOUT_DAY = FRIDAY; // Friday (Production)
 constexpr uint64 QRWA_PAYOUT_HOUR = 12; // 12:00 PM UTC (Production)
 constexpr uint64 QRWA_MIN_PAYOUT_INTERVAL_MS = 6 * 86400000LL; // 6 days in milliseconds (Production)
-constexpr uint64 QRWA_PAYOUT_TICK_INTERVAL = 100; // TESTING: Check every 100 ticks for payout
+constexpr uint64 QRWA_PAYOUT_TICK_INTERVAL = 20; // TESTING: Check every 20 ticks for payout
 
 // STATUS CODES for Procedures
 constexpr uint64 QRWA_STATUS_SUCCESS = 1;
