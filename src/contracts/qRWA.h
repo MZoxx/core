@@ -1563,14 +1563,14 @@ public:
             }
         }
 
-        // Calculate 2/3 quorum threshold
+        // Calculate simple majority threshold (>50% of total voting power)
         locals.quorumThreshold = 0;
         if (locals.totalQminePower > 0)
         {
-            locals.quorumThreshold = div<uint64>(sadd(smul(locals.totalQminePower, 2ULL), 2ULL), 3ULL);
+            locals.quorumThreshold = sadd(div<uint64>(locals.totalQminePower, 2ULL), 1ULL);
         }
 
-        // Finalize Gov Vote (check against 2/3 quorum)
+        // Finalize Gov Vote (check against simple majority threshold)
         locals.govPassed = 0;
         if (locals.topScore >= locals.quorumThreshold && locals.topProposalIndex != NULL_INDEX)
         {
@@ -1795,7 +1795,7 @@ public:
                     locals.logger.valueA = locals.poll.proposalId;
                     LOG_INFO(locals.logger);
                 }
-                else // Vote failed (NO wins or < quorum)
+                else // Vote failed (simple majority not reached)
                 {
                     locals.poll.status = QRWA_POLL_STATUS_FAILED_VOTE;
                 }
