@@ -2016,7 +2016,8 @@ public:
                             locals.endBalance = 0;
                         }
 
-                        locals.eligibleBalance = (locals.beginBalance < locals.endBalance) ? locals.beginBalance : locals.endBalance;
+                        // If holder reduced shares during the epoch → zero payout, full portion to dev
+                        locals.eligibleBalance = (locals.endBalance >= locals.beginBalance) ? locals.beginBalance : 0;
 
                         if (locals.eligibleBalance > 0)
                         {
