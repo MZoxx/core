@@ -205,6 +205,9 @@ protected:
     // Dedicated revenue configuration
     id mDedicatedRevenueAddress;
 
+    // Pool A revenue address (QMINE issuer or configured mining address)
+    id mPoolARevenueAddress;
+
     // Total distributed tracking
     uint64 mTotalQmineDistributed;
     uint64 mTotalQRWADistributed;
@@ -863,6 +866,60 @@ public:
         }
     }
 
+    // ── SetPoolARevenueAddress: Admin-only setter for mPoolARevenueAddress ──
+    struct SetPoolARevenueAddress_input
+    {
+        id newAddress;
+    };
+    struct SetPoolARevenueAddress_output
+    {
+        uint64 status;
+    };
+    struct SetPoolARevenueAddress_locals
+    {
+        QRWALogger logger;
+    };
+    PUBLIC_PROCEDURE_WITH_LOCALS(SetPoolARevenueAddress)
+    {
+        output.status = QRWA_STATUS_FAILURE_GENERAL;
+        locals.logger.contractId = CONTRACT_INDEX;
+        locals.logger.logType = QRWA_LOG_TYPE_ADMIN_ACTION;
+        locals.logger.primaryId = qpi.invocator();
+
+        // Refund invocation reward
+        if (qpi.invocationReward() > 0)
+        {
+            qpi.transfer(qpi.invocator(), qpi.invocationReward());
+        }
+
+        // Admin-only check
+        if (qpi.invocator() != state.mCurrentGovParams.mAdminAddress)
+        {
+            output.status = QRWA_STATUS_FAILURE_NOT_AUTHORIZED;
+            locals.logger.logType = QRWA_LOG_TYPE_ERROR;
+            locals.logger.valueB = output.status;
+            LOG_INFO(locals.logger);
+            return;
+        }
+
+        // Validate new address is not NULL
+        if (input.newAddress == NULL_ID)
+        {
+            output.status = QRWA_STATUS_FAILURE_INVALID_INPUT;
+            locals.logger.logType = QRWA_LOG_TYPE_ERROR;
+            locals.logger.valueB = output.status;
+            LOG_INFO(locals.logger);
+            return;
+        }
+
+        // Set the new Pool A revenue address
+        state.mPoolARevenueAddress = input.newAddress;
+        output.status = QRWA_STATUS_SUCCESS;
+        locals.logger.valueA = 1; // signals address was set
+        locals.logger.valueB = output.status;
+        LOG_INFO(locals.logger);
+    }
+
     /***************************************************/
     /***************** PUBLIC FUNCTIONS ****************/
     /***************************************************/
@@ -1176,11 +1233,24 @@ public:
         state.mQRWADividendPool = 0;
         state.mDedicatedQRWADividendPool = 0;
 
+        // Dedicated BTC revenue address (Pool C)
+        // Production: USALFUZBICLZIEMYPSKLYDZJZRFBKYEONUGSWFXOIGRMWSJHLIPMEGZCVCMG
+        // Testnet: MTYXXZQAZGBXLCWJQSMBDOIUNTLADGTOLCHQIQVOAFOOHKQZSQBKJMMFRXHI
         state.mDedicatedRevenueAddress = ID(
-            _P, _D, _Q, _T, _K, _K, _I, _R, _S, _I, _G, _A, _G, _A, _O, _L,
-            _J, _W, _Z, _W, _T, _C, _B, _S, _F, _C, _Y, _A, _I, _Z, _I, _R,
-            _Y, _C, _H, _E, _B, _K, _H, _B, _J, _H, _H, _B, _J, _N, _J, _H,
-            _W, _L, _Y, _G, _X, _S, _V, _E
+            _M, _T, _Y, _X, _X, _Z, _Q, _A, _Z, _G, _B, _X, _L, _C, _W, _J,
+            _Q, _S, _M, _B, _D, _O, _I, _U, _N, _T, _L, _A, _D, _G, _T, _O,
+            _L, _C, _H, _Q, _I, _Q, _V, _O, _A, _F, _O, _O, _H, _K, _Q, _Z,
+            _S, _Q, _B, _K, _J, _M, _M, _F
+        );
+
+        // Pool A revenue address (Mining / QMINE issuer)
+        // Production: QMINEQQXYBEGBHNSUPOUYDIQKZPCBPQIIHUUZMCPLBPCCAIARVZBTYKGFCWM
+        // Testnet: IZNUAVRCTNYBQBSFYWBBPQUXASPCYDZYKFFULCEGLCFCEQPTLDTKZQMENKRN
+        state.mPoolARevenueAddress = ID(
+            _I, _Z, _N, _U, _A, _V, _R, _C, _T, _N, _Y, _B, _Q, _B, _S, _F,
+            _Y, _W, _B, _B, _P, _Q, _U, _X, _A, _S, _P, _C, _Y, _D, _Z, _Y,
+            _K, _F, _F, _U, _L, _C, _E, _G, _L, _C, _F, _C, _E, _Q, _P, _T,
+            _L, _D, _T, _K, _Z, _Q, _M, _E
         );
 
         // Initialize total distributed
@@ -1211,6 +1281,21 @@ public:
     };
     BEGIN_EPOCH_WITH_LOCALS()
     {
+        // ── Migration: auto-initialize mPoolARevenueAddress if not set ──
+        // INITIALIZE only runs once at contract creation, so state variables added
+        // after deployment need to be initialized here on first epoch.
+        if (state.mPoolARevenueAddress == NULL_ID)
+        {
+            // Testnet: IZNUAVRCTNYBQBSFYWBBPQUXASPCYDZYKFFULCEGLCFCEQPTLDTKZQMENKRN
+            // Production: change to QMINEQQXYBEGBHNSUPOUYDIQKZPCBPQIIHUUZMCPLBPCCAIARVZBTYKGFCWM
+            state.mPoolARevenueAddress = ID(
+                _I, _Z, _N, _U, _A, _V, _R, _C, _T, _N, _Y, _B, _Q, _B, _S, _F,
+                _Y, _W, _B, _B, _P, _Q, _U, _X, _A, _S, _P, _C, _Y, _D, _Z, _Y,
+                _K, _F, _F, _U, _L, _C, _E, _G, _L, _C, _F, _C, _E, _Q, _P, _T,
+                _L, _D, _T, _K, _Z, _Q, _M, _E
+            );
+        }
+
         // Reset new poll counters
         state.mNewGovPollsThisEpoch = 0;
         state.mNewAssetPollsThisEpoch = 0;
@@ -2183,12 +2268,13 @@ public:
     };
     POST_INCOMING_TRANSFER_WITH_LOCALS()
     {
-        // Differentiate revenue streams based on source type
-        // Dedicated address transfers go to the dedicated pool
-        // Only deposit to Pool A if source is QUTIL
-        // All other transfers (users or other contracts) go to Pool B
+        // Revenue routing:
+        // Pool A: QUTIL contract OR mPoolARevenueAddress (QMINE issuer / mining revenue)
+        // Pool C: Dedicated BTC revenue address (mDedicatedRevenueAddress)
+        // Pool B: Everything else (users, other contracts)
         if (state.mDedicatedRevenueAddress != NULL_ID && input.sourceId == state.mDedicatedRevenueAddress)
         {
+            // Pool C: Dedicated BTC revenue address
             state.mDedicatedRevenuePool = sadd(state.mDedicatedRevenuePool, static_cast<uint64>(input.amount));
             locals.logger.contractId = CONTRACT_INDEX;
             locals.logger.logType = QRWA_LOG_TYPE_INCOMING_REVENUE_DEDICATED;
@@ -2197,9 +2283,10 @@ public:
             locals.logger.valueB = input.type;
             LOG_INFO(locals.logger);
         }
-        else if (input.sourceId == id(QUTIL_CONTRACT_INDEX, 0, 0, 0))
+        else if (input.sourceId == id(QUTIL_CONTRACT_INDEX, 0, 0, 0) ||
+                 (state.mPoolARevenueAddress != NULL_ID && input.sourceId == state.mPoolARevenueAddress))
         {
-            // Source is explicitly QUTIL -> Pool A
+            // Pool A: QUTIL (SendToMany) or direct transfer from Pool A revenue address
             state.mRevenuePoolA = sadd(state.mRevenuePoolA, static_cast<uint64>(input.amount));
             locals.logger.contractId = CONTRACT_INDEX;
             locals.logger.logType = QRWA_LOG_TYPE_INCOMING_REVENUE_A;
@@ -2210,7 +2297,7 @@ public:
         }
         else if (input.sourceId != NULL_ID)
         {
-            // Source is NOT QUTIL (User or other Contract) -> Pool B
+            // Pool B: All other sources (users, other contracts)
             state.mRevenuePoolB = sadd(state.mRevenuePoolB, static_cast<uint64>(input.amount));
             locals.logger.contractId = CONTRACT_INDEX;
             locals.logger.logType = QRWA_LOG_TYPE_INCOMING_REVENUE_B;
@@ -2241,6 +2328,7 @@ public:
         REGISTER_USER_PROCEDURE(VoteAssetRelease, 6);
         REGISTER_USER_PROCEDURE(DepositGeneralAsset, 7);
         REGISTER_USER_PROCEDURE(RevokeAssetManagementRights, 8);
+        REGISTER_USER_PROCEDURE(SetPoolARevenueAddress, 9);
 
         // FUNCTIONS
         REGISTER_USER_FUNCTION(GetGovParams, 1);
