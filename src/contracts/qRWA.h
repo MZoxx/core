@@ -4,7 +4,7 @@ using namespace QPI;
 /******************* CONSTANTS *********************/
 /***************************************************/
 
-constexpr uint64 QRWA_MAX_QMINE_HOLDERS = 1048576 * 2 * X_MULTIPLIER; // 2^21
+constexpr uint64 QRWA_MAX_QMINE_HOLDERS = 131072 * X_MULTIPLIER; // 2^17 = 128K unique holders max (563MB → 37MB state)
 constexpr uint64 QRWA_MAX_GOV_POLLS = 64; // 8 active polls * 8 epochs = 64 slots
 constexpr uint64 QRWA_MAX_ASSET_POLLS = 64; // 8 active polls * 8 epochs = 64 slots
 constexpr uint64 QRWA_MAX_ASSETS = 1024; // 2^10
