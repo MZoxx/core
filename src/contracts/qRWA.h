@@ -2372,8 +2372,48 @@ public:
         output.allowTransfer = true;
     }
 
-    POST_ACQUIRE_SHARES()
+    struct POST_ACQUIRE_SHARES_locals
     {
+        sint64 transferResult;
+        uint64 currentAssetBalance;
+        QRWAAsset wrapper;
+        QRWALogger logger;
+    };
+    POST_ACQUIRE_SHARES_WITH_LOCALS()
+    {
+        // Automatically lock shares permanently: transfer ownership+possession from
+        // the previous owner/possessor to SELF and record in mGeneralAssetBalances.
+        // This allows any user to deposit SC shares in 2 steps:
+        //   1. Buy shares on QX
+        //   2. Transfer management rights to qRWA (this callback fires automatically)
+        locals.transferResult = qpi.transferShareOwnershipAndPossession(
+            input.asset.assetName,
+            input.asset.issuer,
+            input.owner,          // current owner
+            input.possessor,      // current possessor
+            input.numberOfShares,
+            SELF                  // new owner and possessor (permanent lock)
+        );
+
+        locals.logger.contractId = CONTRACT_INDEX;
+        locals.logger.logType = QRWA_LOG_TYPE_ADMIN_ACTION;
+        locals.logger.primaryId = input.owner;
+        locals.logger.valueA = input.asset.assetName;
+
+        if (locals.transferResult >= 0)
+        {
+            locals.wrapper.setFrom(input.asset);
+            state.mGeneralAssetBalances.get(locals.wrapper, locals.currentAssetBalance); // 0 if not present
+            locals.currentAssetBalance = sadd(locals.currentAssetBalance, (uint64)input.numberOfShares);
+            state.mGeneralAssetBalances.set(locals.wrapper, locals.currentAssetBalance);
+            locals.logger.valueB = QRWA_STATUS_SUCCESS;
+        }
+        else
+        {
+            locals.logger.valueB = QRWA_STATUS_FAILURE_TRANSFER_FAILED;
+        }
+
+        LOG_INFO(locals.logger);
     }
 
     REGISTER_USER_FUNCTIONS_AND_PROCEDURES()
