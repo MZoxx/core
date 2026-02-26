@@ -208,6 +208,9 @@ protected:
     // Pool A revenue address (QMINE issuer or configured mining address)
     id mPoolARevenueAddress;
 
+    // Fundraising address — excluded from ALL distributions
+    id mFundraisingAddress;
+
     // Total distributed tracking
     uint64 mTotalQmineDistributed;
     uint64 mTotalQRWADistributed;
@@ -1235,12 +1238,21 @@ public:
 
         // Dedicated BTC revenue address (Pool C)
         // Production: USALFUZBICLZIEMYPSKLYDZJZRFBKYEONUGSWFXOIGRMWSJHLIPMEGZCVCMG
-        // Testnet: MTYXXZQAZGBXLCWJQSMBDOIUNTLADGTOLCHQIQVOAFOOHKQZSQBKJMMFRXHI
+        // Testnet: WFCELJRTMTYEGHNTYONQOWVQIUYBVBPTSIRCOTJUXFIQAQPEYJQGQQSAVDDM
         state.mDedicatedRevenueAddress = ID(
-            _M, _T, _Y, _X, _X, _Z, _Q, _A, _Z, _G, _B, _X, _L, _C, _W, _J,
-            _Q, _S, _M, _B, _D, _O, _I, _U, _N, _T, _L, _A, _D, _G, _T, _O,
-            _L, _C, _H, _Q, _I, _Q, _V, _O, _A, _F, _O, _O, _H, _K, _Q, _Z,
-            _S, _Q, _B, _K, _J, _M, _M, _F
+            _W, _F, _C, _E, _L, _J, _R, _T, _M, _T, _Y, _E, _G, _H, _N, _T,
+            _Y, _O, _N, _Q, _O, _W, _V, _Q, _I, _U, _Y, _B, _V, _B, _P, _T,
+            _S, _I, _R, _C, _O, _T, _J, _U, _X, _F, _I, _Q, _A, _Q, _P, _E,
+            _Y, _J, _Q, _G, _Q, _Q, _S, _A
+        );
+
+        // Fundraising address — excluded from ALL distributions
+        // QTDSQGIEAPPMMDDSEHBHHETEUZHBUZXRYFKKTICWAAUXVEWNPCTGCAFBYWWB
+        state.mFundraisingAddress = ID(
+            _Q, _T, _D, _S, _Q, _G, _I, _E, _A, _P, _P, _M, _M, _D, _D, _S,
+            _E, _H, _B, _H, _H, _E, _T, _E, _U, _Z, _H, _B, _U, _Z, _X, _R,
+            _Y, _F, _K, _K, _T, _I, _C, _W, _A, _A, _U, _X, _V, _E, _W, _N,
+            _P, _C, _T, _G, _C, _A, _F, _B
         );
 
         // Pool A revenue address (Mining / QMINE issuer)
@@ -1296,6 +1308,32 @@ public:
             );
         }
 
+        // Migration: auto-initialize mFundraisingAddress if not set
+        if (state.mFundraisingAddress == NULL_ID)
+        {
+            state.mFundraisingAddress = ID(
+                _Q, _T, _D, _S, _Q, _G, _I, _E, _A, _P, _P, _M, _M, _D, _D, _S,
+                _E, _H, _B, _H, _H, _E, _T, _E, _U, _Z, _H, _B, _U, _Z, _X, _R,
+                _Y, _F, _K, _K, _T, _I, _C, _W, _A, _A, _U, _X, _V, _E, _W, _N,
+                _P, _C, _T, _G, _C, _A, _F, _B
+            );
+        }
+
+        // Migration: update mDedicatedRevenueAddress to new Pool C address
+        // Testnet: WFCELJRTMTYEGHNTYONQOWVQIUYBVBPTSIRCOTJUXFIQAQPEYJQGQQSAVDDM
+        {
+            id newDedicatedAddr = ID(
+                _W, _F, _C, _E, _L, _J, _R, _T, _M, _T, _Y, _E, _G, _H, _N, _T,
+                _Y, _O, _N, _Q, _O, _W, _V, _Q, _I, _U, _Y, _B, _V, _B, _P, _T,
+                _S, _I, _R, _C, _O, _T, _J, _U, _X, _F, _I, _Q, _A, _Q, _P, _E,
+                _Y, _J, _Q, _G, _Q, _Q, _S, _A
+            );
+            if (state.mDedicatedRevenueAddress != newDedicatedAddr)
+            {
+                state.mDedicatedRevenueAddress = newDedicatedAddr;
+            }
+        }
+
         // Reset new poll counters
         state.mNewGovPollsThisEpoch = 0;
         state.mNewAssetPollsThisEpoch = 0;
@@ -1312,6 +1350,11 @@ public:
             {
                 // Exclude SELF (Treasury) from dividend snapshot
                 if (locals.iter.possessor() == SELF)
+                {
+                    continue;
+                }
+                // Exclude fundraising address from all distributions
+                if (state.mFundraisingAddress != NULL_ID && locals.iter.possessor() == state.mFundraisingAddress)
                 {
                     continue;
                 }
@@ -1416,6 +1459,11 @@ public:
             {
                 // Exclude SELF (Treasury) from dividend snapshot
                 if (locals.iter.possessor() == SELF)
+                {
+                    continue;
+                }
+                // Exclude fundraising address from all distributions
+                if (state.mFundraisingAddress != NULL_ID && locals.iter.possessor() == state.mFundraisingAddress)
                 {
                     continue;
                 }
@@ -1941,6 +1989,12 @@ public:
                         locals.holder = state.mPayoutBeginBalances.key(locals.qminePayoutIndex);
                         locals.beginBalance = state.mPayoutBeginBalances.value(locals.qminePayoutIndex);
 
+                        // Exclude fundraising address
+                        if (state.mFundraisingAddress != NULL_ID && locals.holder == state.mFundraisingAddress)
+                        {
+                            continue;
+                        }
+
                         locals.foundEnd = state.mPayoutEndBalances.get(locals.holder, locals.endBalance) ? 1 : 0;
                         if (locals.foundEnd == 0)
                         {
@@ -2034,7 +2088,7 @@ public:
                     state.mQmineDividendPool = locals.qmineDividendPool_128.low;
                 } // End QMINE distribution
 
-                // Distribute qRWA shareholder rewards (only to holders with >= 100K QMINE per qRWA share)
+                // Distribute qRWA shareholder rewards (Pool B — requires QMINE > 0, no 100K minimum per share)
                 if (state.mQRWADividendPool > 0)
                 {
                     locals.qrwaAsset.issuer = id::zero();
@@ -2055,7 +2109,13 @@ public:
                         {
                             continue;
                         }
+                        // Exclude fundraising address
+                        if (state.mFundraisingAddress != NULL_ID && locals.holder == state.mFundraisingAddress)
+                        {
+                            continue;
+                        }
 
+                        // Must hold at least 1 QMINE to be eligible
                         locals.qmineBalance = qpi.numberOfShares(
                             state.mQmineAsset,
                             AssetOwnershipSelect::byOwner(locals.holder),
@@ -2067,11 +2127,7 @@ public:
                             continue;
                         }
 
-                        locals.requiredQmine = smul(locals.qrwaShares, QRWA_QMINE_PER_QRWA_SHARE_MIN);
-                        if (static_cast<uint64>(locals.qmineBalance) >= locals.requiredQmine)
-                        {
-                            locals.eligibleShares = sadd(locals.eligibleShares, locals.qrwaShares);
-                        }
+                        locals.eligibleShares = sadd(locals.eligibleShares, locals.qrwaShares);
                     }
 
                     if (locals.eligibleShares > 0)
@@ -2095,7 +2151,13 @@ public:
                                 {
                                     continue;
                                 }
+                                // Exclude fundraising address
+                                if (state.mFundraisingAddress != NULL_ID && locals.holder == state.mFundraisingAddress)
+                                {
+                                    continue;
+                                }
 
+                                // Must hold at least 1 QMINE to be eligible
                                 locals.qmineBalance = qpi.numberOfShares(
                                     state.mQmineAsset,
                                     AssetOwnershipSelect::byOwner(locals.holder),
@@ -2103,12 +2165,6 @@ public:
                                 );
 
                                 if (locals.qmineBalance <= 0)
-                                {
-                                    continue;
-                                }
-
-                                locals.requiredQmine = smul(locals.qrwaShares, QRWA_QMINE_PER_QRWA_SHARE_MIN);
-                                if (static_cast<uint64>(locals.qmineBalance) < locals.requiredQmine)
                                 {
                                     continue;
                                 }
@@ -2144,7 +2200,7 @@ public:
                     }
                 }
 
-                // Distribute dedicated qRWA rewards to eligible shareholders
+                // Distribute dedicated qRWA rewards to eligible shareholders (requires >= 100K QMINE per qRWA share)
                 if (state.mDedicatedQRWADividendPool > 0)
                 {
                     locals.qrwaAsset.issuer = id::zero();
@@ -2161,6 +2217,11 @@ public:
 
                         locals.holder = locals.qrwaIter.possessor();
                         if (locals.holder == SELF)
+                        {
+                            continue;
+                        }
+                        // Exclude fundraising address
+                        if (state.mFundraisingAddress != NULL_ID && locals.holder == state.mFundraisingAddress)
                         {
                             continue;
                         }
@@ -2199,6 +2260,11 @@ public:
 
                                 locals.holder = locals.qrwaIter.possessor();
                                 if (locals.holder == SELF)
+                                {
+                                    continue;
+                                }
+                                // Exclude fundraising address
+                                if (state.mFundraisingAddress != NULL_ID && locals.holder == state.mFundraisingAddress)
                                 {
                                     continue;
                                 }
