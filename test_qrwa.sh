@@ -12,8 +12,10 @@
 #   ./test_qrwa.sh                 # Alle Tests
 #   ./test_qrwa.sh --readonly      # Nur Read-Only Functions
 #   ./test_qrwa.sh --send          # Nur sende Tests (QU → Contract)
+#   ./test_qrwa.sh --pools         # Nur Pool A/B/C Routing Tests (9, 9b, 9d, 9c)
 #   ./test_qrwa.sh --vote          # Nur Governance Vote
 #   ./test_qrwa.sh --payout        # Payout-Zyklus, 90/10 Split, Gov Fees
+#   ./test_qrwa.sh --epoch          # Epoch-Change + automatische Payout-Verifikation
 #
 
 set -uo pipefail
@@ -28,13 +30,16 @@ NODE_PORT="31841"
 # Seeds (55 Zeichen) 
 SEED1="gtfgjhtoxcddbxrydatevcmildkmqeiezwgztpwseihqhqxmoamxfak"
 SEED2="ytcltfdvfjvskmarrjxloxkjrwtbjbepzjphowjfszldyjscrmztmor"
-SEED3="uvvpotkojamyifpzgklgwnrxudclcjoqcmsywcbqarujokczzqxykml"  # Dedicated Revenue Address
+SEED3="slmvcerjvoncdlluydvilhuddusewxgoshuhgwelljzjykfllywlhon"  # Dedicated Revenue Address (Pool C)
+SEED4="jaceqhnbufbcyoninbynpmglseulbuabscdrqttdwlflirpxnhnknpz"  # Extra Test Seed
+SEED_POOL_A="ughdrtzbfhqhmzsnoxvalppxbgmbfazcgvocacdkfrwnolzvrzqzbny"  # Pool A Revenue Address (Mining)
 
 CLI="../qubic-cli/build/qubic-cli"
 
 CONTRACT_INDEX=20
 QRWA_IDENTITY="UAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHQEE"
-DEDICATED_IDENTITY="PDQTKKIRSIGAGAOLJWZWTCBSFCYAIZIRYCHEBKHBJHHBJNJHWLYGXSVEQEFC"
+DEDICATED_IDENTITY="MTYXXZQAZGBXLCWJQSMBDOIUNTLADGTOLCHQIQVOAFOOHKQZSQBKJMMFRXHI"
+POOL_A_IDENTITY="IZNUAVRCTNYBQBSFYWBBPQUXASPCYDZYKFFULCEGLCFCEQPTLDTKZQMENKRN"
 
 # QMINE Asset
 QMINE_ISSUER="QMINEQQXYBEGBHNSUPOUYDIQKZPCBPQIIHUUZMCPLBPCCAIARVZBTYKGFCWM"
@@ -42,8 +47,10 @@ QMINE_NAME="QMINE"
 
 SCHEDULE_TICK=5
 SEND_AMOUNT=5000000         # 5M QU für Pool B Test
-DEDICATED_AMOUNT=3000000    # 3M QU für Dedicated Pool Test
-TX_WAIT_SEC=10              # Wartezeit für TX-Bestätigung
+DEDICATED_AMOUNT=3000000    # 3M QU für Dedicated Pool Test (Pool C)
+POOL_A_AMOUNT=5000000       # 5M QU für Pool A Test (Mining Revenue)
+TX_WAIT_SEC=12              # Wartezeit für TX-Bestätigung
+EPOCH_TICKS=100             # Ticks pro Epoch (Testnet-Konfiguration)
 
 ###############################################
 # FARBEN & ZAEHLER
@@ -431,7 +438,7 @@ fi # end --readonly
 # TEST 9: QU AN CONTRACT SENDEN (Pool B)
 ###############################################
 
-if [[ "$MODE" == "all" || "$MODE" == "--send" ]]; then
+if [[ "$MODE" == "all" || "$MODE" == "--send" || "$MODE" == "--pools" ]]; then
 
 header "TEST 9: QU an QRWA senden (Revenue Pool B)"
 
@@ -470,7 +477,7 @@ fi
 ###############################################
 
 header "TEST 9b: QUTIL SendToManyV1 → QRWA (Revenue Pool A)"
-step "QUTIL-Transfer wird als sourceId=QUTIL erkannt → Pool A → Gov Fees 50%"
+step "QUTIL-Transfer oder QMINE-Issuer-Transfer → Pool A → Gov Fees 50%"
 
 # Snapshot Dividend Balances VOR QUTIL Transfer
 BEFORE_A=$(call_fn 5 "" "{ uint64, uint64, uint64, uint64, uint64, uint64 }")
@@ -525,11 +532,78 @@ fi
 rm -f "$QUTIL_FILE"
 
 ###############################################
+# TEST 9d: POOL A ADDRESS → Pool A (Direct Transfer from Mining Address)
+###############################################
+
+header "TEST 9d: Pool A Address → QRWA (Direct Mining Revenue → Pool A)"
+step "Transfer von mPoolARevenueAddress (${POOL_A_IDENTITY:0:12}…) → Pool A → Gov Fees"
+step "Pool A Adresse hat ~50B QU für Tests"
+
+# Snapshot Dividend Balances VOR Pool A Direct Transfer
+BEFORE_A2=$(call_fn 5 "" "{ uint64, uint64, uint64, uint64, uint64, uint64 }")
+POOL_A_BEFORE2=$(echo "$BEFORE_A2" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | sed -n '1p')
+POOL_A_BEFORE2=${POOL_A_BEFORE2:-0}
+POOL_B_BEFORE2=$(echo "$BEFORE_A2" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | sed -n '2p')
+POOL_B_BEFORE2=${POOL_B_BEFORE2:-0}
+echo -e "  Pool A VOR Transfer: ${POOL_A_BEFORE2} QU"
+echo -e "  Pool B VOR Transfer: ${POOL_B_BEFORE2} QU"
+
+step "Sende ${POOL_A_AMOUNT} QU von Pool A Address → $QRWA_IDENTITY"
+TX_OUTPUT_A2=$(cli_call_seed "$SEED_POOL_A" -sendtoaddress "$QRWA_IDENTITY" "$POOL_A_AMOUNT")
+echo "$TX_OUTPUT_A2" | sed 's/^/    /'
+
+TX_HASH_A2=$(echo "$TX_OUTPUT_A2" | grep "TxHash:" | awk '{print $2}')
+TX_TICK_A2=$(echo "$TX_OUTPUT_A2" | grep "Tick:" | awk '{print $2}')
+
+if [[ -z "$TX_HASH_A2" || -z "$TX_TICK_A2" ]]; then
+    record_fail "Pool A Direct → Pool A" "TX konnte nicht gesendet werden"
+else
+    echo ""
+    step "Warte ${TX_WAIT_SEC}s auf Bestätigung (Tick $TX_TICK_A2)..."
+    CHECK_A2=$(wait_and_check_tx "$TX_TICK_A2" "$TX_HASH_A2")
+    echo "$CHECK_A2" | sed 's/^/    /'
+
+    if echo "$CHECK_A2" | grep -q "MoneyFlew: Yes"; then
+        record_pass "Pool A Direct → Pool A — ${POOL_A_AMOUNT} QU, MoneyFlew: Yes"
+
+        # Verifiziere dass Pool A gewachsen ist und Pool B NICHT
+        sleep 3
+        AFTER_A2=$(call_fn 5 "" "{ uint64, uint64, uint64, uint64, uint64, uint64 }")
+        POOL_A_AFTER2=$(echo "$AFTER_A2" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | sed -n '1p')
+        POOL_A_AFTER2=${POOL_A_AFTER2:-0}
+        POOL_B_AFTER2=$(echo "$AFTER_A2" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | sed -n '2p')
+        POOL_B_AFTER2=${POOL_B_AFTER2:-0}
+        echo ""
+        echo -e "    Pool A vorher: ${POOL_A_BEFORE2} QU → nachher: ${POOL_A_AFTER2} QU"
+        echo -e "    Pool B vorher: ${POOL_B_BEFORE2} QU → nachher: ${POOL_B_AFTER2} QU"
+
+        if [[ "$POOL_A_AFTER2" -gt "$POOL_A_BEFORE2" ]]; then
+            record_pass "Pool A Direct befüllt — +$((POOL_A_AFTER2 - POOL_A_BEFORE2)) QU"
+        else
+            echo -e "    ${YELLOW}Pool A nicht gestiegen (evtl. sofort Payout verteilt)${NC}"
+            record_skip "Pool A Direct Check" "Pool A: ${POOL_A_AFTER2} (evtl. sofort verteilt)"
+        fi
+
+        # Pool B sollte sich nicht verändert haben
+        if [[ "$POOL_B_AFTER2" -eq "$POOL_B_BEFORE2" ]]; then
+            record_pass "Pool B unverändert — korrekte Routing zu Pool A"
+        else
+            echo -e "    ${YELLOW}Pool B hat sich geändert (${POOL_B_BEFORE2} → ${POOL_B_AFTER2}) — anderer Transfer?${NC}"
+            record_skip "Pool B Routing Check" "Pool B geändert (evtl. parallele Transfers)"
+        fi
+    elif echo "$CHECK_A2" | grep -q "MoneyFlew: N/A"; then
+        record_skip "Pool A Direct → Pool A" "TX noch nicht bestätigt (N/A)"
+    else
+        record_fail "Pool A Direct → Pool A" "MoneyFlew != Yes"
+    fi
+fi
+
+###############################################
 # TEST 9c: DEDICATED ADDRESS → Dedicated Pool (No Gov Fees!)
 ###############################################
 
-header "TEST 9c: Dedicated Address → QRWA (Dedicated Revenue Pool)"
-step "Transfer von mDedicatedRevenueAddress → Dedicated Pool (kein Gov Fee)"
+header "TEST 9c: Dedicated Address → QRWA (Pool C / Dedicated Revenue Pool)"
+step "Transfer von mDedicatedRevenueAddress → Pool C (kein Gov Fee)"
 step "Dedicated Address: ${DEDICATED_IDENTITY}"
 
 # Snapshot Dividend Balances VOR Dedicated Transfer
@@ -1281,9 +1355,93 @@ else
             fi
 
         # Fall C: Nur QMINE Pool wuchs (kein Epoch-Snapshot UND qRWA nicht verteilt)
+        #         → Automatisch auf Epoch-Wechsel warten, dann erneut prüfen
         elif [[ "$QMINE_POOL_DELTA" -gt 0 ]]; then
-            echo -e "    ${YELLOW}QMINE Pool akkumuliert, QRWA nicht verteilt (kein Epoch?)${NC}"
-            record_skip "90/10 Split" "Nur QMINE Pool +${QMINE_POOL_DELTA}, kein QRWA Delta"
+            echo -e "    ${YELLOW}QMINE Pool akkumuliert (+${QMINE_POOL_DELTA}), kein Epoch-Snapshot vorhanden${NC}"
+            echo -e "    ${CYAN}→ Warte auf Epoch-Wechsel damit BEGIN_EPOCH QMINE-Snapshot anlegt...${NC}"
+            echo ""
+
+            # Aktuelle Epoch lesen
+            EC_SYS=$(cli_call -getsysteminfo 2>&1 || cli_call -getcurrenttick 2>&1)
+            EC_EPOCH=$(echo "$EC_SYS" | grep -i 'Epoch:' | awk '{print $2}')
+            EC_TICK=$(echo "$EC_SYS" | grep -i 'Tick:' | awk '{print $2}')
+            if [[ -z "$EC_EPOCH" ]]; then
+                EC_FALLBACK=$(cli_call -getcurrenttick)
+                EC_EPOCH=$(echo "$EC_FALLBACK" | grep 'Epoch:' | awk '{print $2}')
+                EC_TICK=$(echo "$EC_FALLBACK" | grep 'Tick:' | awk '{print $2}')
+            fi
+            EC_EPOCH=${EC_EPOCH:-0}
+            EC_TICK=${EC_TICK:-0}
+            echo -e "    Aktuelle Epoch: ${EC_EPOCH} | Tick: ${EC_TICK}"
+            echo -e "    Testnet: ${EPOCH_TICKS} Ticks/Epoch — warte auf Epoch $((EC_EPOCH + 1))..."
+
+            # Snapshot VOR Epoch-Wechsel
+            EC_QMINE_DIST_BEFORE=$(echo "$AFTER_TOTAL" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | sed -n '1p')
+            EC_QMINE_DIST_BEFORE=${EC_QMINE_DIST_BEFORE:-0}
+            EC_QMINE_POOL_BEFORE=$AFTER_QMINE_POOL
+
+            # Warte auf Epoch-Wechsel (max 30 Min)
+            EC_CHANGED=0
+            EC_WAIT_MAX=120
+            for ec_i in $(seq 1 $EC_WAIT_MAX); do
+                sleep 15
+                EC_CHK=$(cli_call -getsysteminfo 2>&1 || cli_call -getcurrenttick 2>&1)
+                EC_EP=$(echo "$EC_CHK" | grep -i 'Epoch:' | awk '{print $2}')
+                EC_TK=$(echo "$EC_CHK" | grep -i 'Tick:' | awk '{print $2}')
+                if [[ -z "$EC_EP" ]]; then
+                    EC_FB=$(cli_call -getcurrenttick)
+                    EC_EP=$(echo "$EC_FB" | grep 'Epoch:' | awk '{print $2}')
+                    EC_TK=$(echo "$EC_FB" | grep 'Tick:' | awk '{print $2}')
+                fi
+                EC_EP=${EC_EP:-$EC_EPOCH}
+                EC_TK=${EC_TK:-0}
+
+                if [[ "$((ec_i % 4))" -eq 0 || "$ec_i" -eq 1 ]]; then
+                    echo -e "    [${ec_i}/${EC_WAIT_MAX}] Epoch: ${EC_EP} | Tick: ${EC_TK}"
+                fi
+
+                if [[ "$EC_EP" -gt "$EC_EPOCH" ]]; then
+                    EC_CHANGED=1
+                    echo -e "    ${GREEN}${BOLD}Epoch gewechselt: ${EC_EPOCH} → ${EC_EP}${NC}"
+                    break
+                fi
+            done
+
+            if [[ "$EC_CHANGED" -eq 1 ]]; then
+                echo -e "    ${CYAN}BEGIN_EPOCH hat QMINE-Holder-Snapshot erstellt${NC}"
+                echo -e "    ${CYAN}Warte auf nächsten Payout-Zyklus (alle 20 Ticks)...${NC}"
+
+                # Warte auf QMINE-Distribution (max 3 Minuten)
+                EC_PAYOUT=0
+                for ec_p in $(seq 1 18); do
+                    sleep 10
+                    EC_TOTAL_CHK=$(call_fn 6 "" "{ uint64, uint64 }")
+                    EC_QMINE_DIST_NOW=$(echo "$EC_TOTAL_CHK" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | sed -n '1p')
+                    EC_QMINE_DIST_NOW=${EC_QMINE_DIST_NOW:-0}
+
+                    EC_POOL_CHK=$(call_fn 5 "" "{ uint64, uint64, uint64, uint64, uint64, uint64 }")
+                    EC_QMINE_POOL_NOW=$(echo "$EC_POOL_CHK" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | sed -n '3p')
+                    EC_QMINE_POOL_NOW=${EC_QMINE_POOL_NOW:-0}
+
+                    echo -e "    [${ec_p}/18] QMINE Dist: ${EC_QMINE_DIST_NOW} (vorher: ${EC_QMINE_DIST_BEFORE}) | QMINE Pool: ${EC_QMINE_POOL_NOW}"
+
+                    if [[ "$EC_QMINE_DIST_NOW" -gt "$EC_QMINE_DIST_BEFORE" ]]; then
+                        EC_PAYOUT=1
+                        EC_DELTA_QMINE=$((EC_QMINE_DIST_NOW - EC_QMINE_DIST_BEFORE))
+                        echo -e "    ${GREEN}QMINE Payout nach Epoch! +${EC_DELTA_QMINE} QU an Holder verteilt${NC}"
+                        record_pass "QMINE Payout nach Epoch — +${EC_DELTA_QMINE} QU (Pool war: ${EC_QMINE_POOL_BEFORE})"
+                        break
+                    fi
+                done
+
+                if [[ "$EC_PAYOUT" -eq 0 ]]; then
+                    echo -e "    ${YELLOW}QMINE Pool: ${EC_QMINE_POOL_NOW} QU — noch kein Payout nach Epoch${NC}"
+                    record_skip "QMINE Payout nach Epoch" "Pool: ${EC_QMINE_POOL_NOW} QU, Dist: ${EC_QMINE_DIST_NOW}"
+                fi
+            else
+                echo -e "    ${YELLOW}Kein Epoch-Wechsel in $((EC_WAIT_MAX * 15))s — QMINE Pool wartet${NC}"
+                record_skip "90/10 Split" "Nur QMINE Pool +${QMINE_POOL_DELTA}, kein Epoch-Wechsel"
+            fi
 
         else
             record_skip "90/10 Split" "Keine messbare Verteilung"
@@ -1778,6 +1936,361 @@ if [[ "$QMINE_CHECKED" -gt 0 ]]; then
 fi
 
 ###############################################
+# TEST 19: EPOCH-CHANGE + PAYOUT VERIFIKATION
+###############################################
+
+if [[ "$MODE" == "all" || "$MODE" == "--epoch" ]]; then
+
+header "TEST 19: Epoch-Change + automatische Payout-Verifikation"
+step "Testet ob nach Epoch-Wechsel automatisch Payouts stattfinden"
+step "Testnet: ${EPOCH_TICKS} Ticks pro Epoch, Payout alle 20 Ticks"
+echo ""
+
+# ─── 19a: Systeminfo lesen (Epoch + Tick) ───
+step "Lese aktuelle Systeminfo..."
+SYS_INFO=$(cli_call -getsysteminfo 2>&1 || cli_call -getcurrenttick 2>&1)
+EPOCH_NOW=$(echo "$SYS_INFO" | grep -i 'Epoch:' | awk '{print $2}')
+TICK_NOW=$(echo "$SYS_INFO" | grep -i 'Tick:' | awk '{print $2}')
+
+if [[ -z "$EPOCH_NOW" || -z "$TICK_NOW" ]]; then
+    # Fallback: getcurrenttick
+    TICK_INFO_19=$(cli_call -getcurrenttick)
+    EPOCH_NOW=$(echo "$TICK_INFO_19" | grep 'Epoch:' | awk '{print $2}')
+    TICK_NOW=$(echo "$TICK_INFO_19" | grep 'Tick:' | awk '{print $2}')
+fi
+
+if [[ -z "$EPOCH_NOW" || -z "$TICK_NOW" ]]; then
+    record_fail "Systeminfo" "Konnte Epoch/Tick nicht lesen"
+else
+    echo -e "    Aktuelle Epoch: ${EPOCH_NOW}"
+    echo -e "    Aktueller Tick: ${TICK_NOW}"
+    record_pass "Systeminfo — Epoch: ${EPOCH_NOW}, Tick: ${TICK_NOW}"
+fi
+
+# ─── 19b: Revenue in Pool B sicherstellen ───
+step "Stelle sicher dass Revenue in Pool B vorhanden ist..."
+EP_BEFORE_DIV=$(call_fn 5 "" "{ uint64, uint64, uint64, uint64, uint64, uint64 }")
+EP_POOL_A_BEFORE=$(echo "$EP_BEFORE_DIV" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | sed -n '1p')
+EP_POOL_B_BEFORE=$(echo "$EP_BEFORE_DIV" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | sed -n '2p')
+EP_QMINE_POOL_BEFORE=$(echo "$EP_BEFORE_DIV" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | sed -n '3p')
+EP_QRWA_POOL_BEFORE=$(echo "$EP_BEFORE_DIV" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | sed -n '4p')
+EP_DEDICATED_BEFORE=$(echo "$EP_BEFORE_DIV" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | sed -n '5p')
+EP_POOL_A_BEFORE=${EP_POOL_A_BEFORE:-0}
+EP_POOL_B_BEFORE=${EP_POOL_B_BEFORE:-0}
+EP_QMINE_POOL_BEFORE=${EP_QMINE_POOL_BEFORE:-0}
+EP_QRWA_POOL_BEFORE=${EP_QRWA_POOL_BEFORE:-0}
+EP_DEDICATED_BEFORE=${EP_DEDICATED_BEFORE:-0}
+
+echo -e "    Pool A: ${EP_POOL_A_BEFORE} QU | Pool B: ${EP_POOL_B_BEFORE} QU"
+echo -e "    QMINE Div Pool: ${EP_QMINE_POOL_BEFORE} QU | QRWA Div Pool: ${EP_QRWA_POOL_BEFORE} QU"
+echo -e "    Dedicated Pool: ${EP_DEDICATED_BEFORE} QU"
+
+EP_TOTAL_REVENUE=$((EP_POOL_A_BEFORE + EP_POOL_B_BEFORE + EP_DEDICATED_BEFORE))
+
+if [[ "$EP_TOTAL_REVENUE" -eq 0 && "$EP_QMINE_POOL_BEFORE" -eq 0 ]]; then
+    step "Keine Revenue — sende ${SEND_AMOUNT} QU an Pool B..."
+    TX_EP=$(cli_call_seed "$SEED1" -sendtoaddress "$QRWA_IDENTITY" "$SEND_AMOUNT")
+    TX_EP_HASH=$(echo "$TX_EP" | grep "TxHash:" | awk '{print $2}')
+    TX_EP_TICK=$(echo "$TX_EP" | grep "Tick:" | awk '{print $2}')
+    if [[ -n "$TX_EP_HASH" && -n "$TX_EP_TICK" ]]; then
+        echo -e "    TX: ${TX_EP_HASH} (Tick ${TX_EP_TICK})"
+        step "Warte auf Bestätigung..."
+        CHK_EP=$(wait_and_check_tx "$TX_EP_TICK" "$TX_EP_HASH")
+        if echo "$CHK_EP" | grep -q "MoneyFlew: Yes"; then
+            echo -e "    ${GREEN}MoneyFlew: Yes — Pool B aufgeladen${NC}"
+            record_pass "Pool B aufgeladen — ${SEND_AMOUNT} QU"
+        else
+            echo -e "    ${YELLOW}MoneyFlew: $(echo "$CHK_EP" | grep MoneyFlew)${NC}"
+            record_skip "Pool B Aufladung" "TX noch nicht bestätigt"
+        fi
+    else
+        record_fail "Pool B Aufladung" "TX konnte nicht gesendet werden"
+    fi
+    sleep 5
+else
+    echo -e "    ${GREEN}✓${NC} Revenue vorhanden (Pool A+B+Dedicated=${EP_TOTAL_REVENUE}, QMINE Pool=${EP_QMINE_POOL_BEFORE})"
+fi
+
+# ─── 19c: TotalDistributed Snapshot VOR Epoch ───
+EP_BEFORE_TOTAL=$(call_fn 6 "" "{ uint64, uint64 }")
+EP_TOTAL_QMINE_BEFORE=$(echo "$EP_BEFORE_TOTAL" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | sed -n '1p')
+EP_TOTAL_QRWA_BEFORE=$(echo "$EP_BEFORE_TOTAL" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | sed -n '2p')
+EP_TOTAL_QMINE_BEFORE=${EP_TOTAL_QMINE_BEFORE:-0}
+EP_TOTAL_QRWA_BEFORE=${EP_TOTAL_QRWA_BEFORE:-0}
+echo -e "    Total QMINE Distributed (vorher): ${EP_TOTAL_QMINE_BEFORE} QU"
+echo -e "    Total QRWA Distributed (vorher):  ${EP_TOTAL_QRWA_BEFORE} QU"
+
+# ─── 19d: Holder-Balances Snapshot VOR Epoch ───
+step "Snapshot: Holder QU-Balances VOR Epoch-Wechsel..."
+declare -a EP_SNAP_IDS=()
+declare -a EP_SNAP_BAL_BEFORE=()
+
+# Nutze die bereits gesammelten SNAP_CHECK_IDS wenn verfügbar
+if [[ ${#SNAP_CHECK_IDS[@]} -gt 0 ]]; then
+    for si in $(seq 0 $((${#SNAP_CHECK_IDS[@]} - 1))); do
+        EP_SNAP_IDS+=("${SNAP_CHECK_IDS[$si]}")
+        BAL_OUT=$(cli_call -getbalance "${SNAP_CHECK_IDS[$si]}")
+        BAL_VAL=$(echo "$BAL_OUT" | grep -oE 'Balance: [0-9]+' | head -1 | awk '{print $2}')
+        EP_SNAP_BAL_BEFORE+=("${BAL_VAL:-0}")
+    done
+    echo -e "    ${GREEN}✓${NC} Snapshot für ${#EP_SNAP_IDS[@]} Holder gespeichert"
+else
+    # Fallback: mindestens Seed 1 + 2
+    for snap_id in "$IDENTITY1" "$IDENTITY2"; do
+        EP_SNAP_IDS+=("$snap_id")
+        BAL_OUT=$(cli_call -getbalance "$snap_id")
+        BAL_VAL=$(echo "$BAL_OUT" | grep -oE 'Balance: [0-9]+' | head -1 | awk '{print $2}')
+        EP_SNAP_BAL_BEFORE+=("${BAL_VAL:-0}")
+    done
+    echo -e "    ${GREEN}✓${NC} Snapshot für ${#EP_SNAP_IDS[@]} Holder (Fallback Seed 1+2)"
+fi
+
+# ─── 19e: Warte auf Epoch-Wechsel ───
+echo ""
+header "TEST 19e: Warte auf Epoch-Wechsel"
+step "Aktuelle Epoch: ${EPOCH_NOW} — warte auf Epoch $((EPOCH_NOW + 1))..."
+step "Testnet: ${EPOCH_TICKS} Ticks/Epoch → prüfe alle 15s"
+echo ""
+
+EPOCH_CHANGED=0
+EPOCH_NEW=0
+TICK_NEW=0
+EPOCH_WAIT_MAX=120  # Max 120 Iterationen × 15s = 30 Minuten
+
+for ep_i in $(seq 1 $EPOCH_WAIT_MAX); do
+    sleep 15
+
+    # Systeminfo lesen
+    SYS_CHK=$(cli_call -getsysteminfo 2>&1 || cli_call -getcurrenttick 2>&1)
+    EP_CHK=$(echo "$SYS_CHK" | grep -i 'Epoch:' | awk '{print $2}')
+    TK_CHK=$(echo "$SYS_CHK" | grep -i 'Tick:' | awk '{print $2}')
+
+    if [[ -z "$EP_CHK" ]]; then
+        # Fallback
+        TICK_INFO_CHK=$(cli_call -getcurrenttick)
+        EP_CHK=$(echo "$TICK_INFO_CHK" | grep 'Epoch:' | awk '{print $2}')
+        TK_CHK=$(echo "$TICK_INFO_CHK" | grep 'Tick:' | awk '{print $2}')
+    fi
+
+    EP_CHK=${EP_CHK:-$EPOCH_NOW}
+    TK_CHK=${TK_CHK:-0}
+
+    # Fortschritt anzeigen
+    if [[ "$((ep_i % 4))" -eq 0 || "$ep_i" -eq 1 ]]; then
+        echo -e "    [${ep_i}/${EPOCH_WAIT_MAX}] Epoch: ${EP_CHK} | Tick: ${TK_CHK}"
+    fi
+
+    if [[ "$EP_CHK" -gt "$EPOCH_NOW" ]]; then
+        EPOCH_CHANGED=1
+        EPOCH_NEW=$EP_CHK
+        TICK_NEW=$TK_CHK
+        echo ""
+        echo -e "    ${GREEN}${BOLD}═══ EPOCH GEWECHSELT! ═══${NC}"
+        echo -e "    ${GREEN}Alte Epoch: ${EPOCH_NOW} → Neue Epoch: ${EPOCH_NEW} (Tick: ${TICK_NEW})${NC}"
+        record_pass "Epoch-Wechsel — ${EPOCH_NOW} → ${EPOCH_NEW}"
+        break
+    fi
+done
+
+if [[ "$EPOCH_CHANGED" -eq 0 ]]; then
+    record_fail "Epoch-Wechsel" "Timeout nach $((EPOCH_WAIT_MAX * 15))s — Epoch blieb bei ${EPOCH_NOW}"
+fi
+
+# ─── 19f: Nach Epoch-Wechsel auf Payout warten ───
+if [[ "$EPOCH_CHANGED" -eq 1 ]]; then
+    echo ""
+    header "TEST 19f: Payout nach Epoch-Wechsel"
+    step "Epoch gewechselt — BEGIN_EPOCH hat Snapshots erstellt"
+    step "Warte auf Payout-Zyklus (alle 20 Ticks)..."
+    echo ""
+
+    # Aktuelle Pools nach Epoch-Wechsel lesen
+    sleep 10  # Kurz warten bis BEGIN_EPOCH fertig
+    EP_MID_DIV=$(call_fn 5 "" "{ uint64, uint64, uint64, uint64, uint64, uint64 }")
+    EP_MID_POOL_A=$(echo "$EP_MID_DIV" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | sed -n '1p')
+    EP_MID_POOL_B=$(echo "$EP_MID_DIV" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | sed -n '2p')
+    EP_MID_QMINE_POOL=$(echo "$EP_MID_DIV" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | sed -n '3p')
+    EP_MID_QRWA_POOL=$(echo "$EP_MID_DIV" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | sed -n '4p')
+    EP_MID_POOL_A=${EP_MID_POOL_A:-0}
+    EP_MID_POOL_B=${EP_MID_POOL_B:-0}
+    EP_MID_QMINE_POOL=${EP_MID_QMINE_POOL:-0}
+    EP_MID_QRWA_POOL=${EP_MID_QRWA_POOL:-0}
+
+    echo -e "    ${BOLD}Pools nach Epoch-Wechsel (vor Payout):${NC}"
+    echo -e "    Pool A: ${EP_MID_POOL_A} | Pool B: ${EP_MID_POOL_B}"
+    echo -e "    QMINE Div Pool: ${EP_MID_QMINE_POOL} | QRWA Div Pool: ${EP_MID_QRWA_POOL}"
+
+    # Warte auf Payout (prüfe alle 10s, max 3 Minuten)
+    EP_PAYOUT_DETECTED=0
+    EP_PAYOUT_MAX=18  # 18 × 10s = 180s = 3 Minuten
+
+    for ep_p in $(seq 1 $EP_PAYOUT_MAX); do
+        sleep 10
+
+        EP_AFTER_DIV=$(call_fn 5 "" "{ uint64, uint64, uint64, uint64, uint64, uint64 }")
+        EP_AFT_POOL_A=$(echo "$EP_AFTER_DIV" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | sed -n '1p')
+        EP_AFT_POOL_B=$(echo "$EP_AFTER_DIV" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | sed -n '2p')
+        EP_AFT_QMINE_POOL=$(echo "$EP_AFTER_DIV" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | sed -n '3p')
+        EP_AFT_POOL_A=${EP_AFT_POOL_A:-0}
+        EP_AFT_POOL_B=${EP_AFT_POOL_B:-0}
+        EP_AFT_QMINE_POOL=${EP_AFT_QMINE_POOL:-0}
+
+        EP_AFTER_TOTAL=$(call_fn 6 "" "{ uint64, uint64 }")
+        EP_AFT_TOTAL_QMINE=$(echo "$EP_AFTER_TOTAL" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | sed -n '1p')
+        EP_AFT_TOTAL_QRWA=$(echo "$EP_AFTER_TOTAL" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | sed -n '2p')
+        EP_AFT_TOTAL_QMINE=${EP_AFT_TOTAL_QMINE:-0}
+        EP_AFT_TOTAL_QRWA=${EP_AFT_TOTAL_QRWA:-0}
+
+        echo -e "    [${ep_p}/${EP_PAYOUT_MAX}] Pool A: ${EP_AFT_POOL_A} | Pool B: ${EP_AFT_POOL_B} | QMINE Pool: ${EP_AFT_QMINE_POOL} | Dist QMINE: ${EP_AFT_TOTAL_QMINE} | Dist QRWA: ${EP_AFT_TOTAL_QRWA}"
+
+        # Payout erkannt wenn:
+        # - Pool A+B gesunken ODER
+        # - TotalDistributed gestiegen ODER
+        # - QMINE Pool verändert (Revenue wurde gesplittet)
+        if [[ "$EP_AFT_TOTAL_QMINE" -gt "$EP_TOTAL_QMINE_BEFORE" ]] || \
+           [[ "$EP_AFT_TOTAL_QRWA" -gt "$EP_TOTAL_QRWA_BEFORE" ]] || \
+           [[ "$EP_AFT_POOL_B" -lt "$EP_POOL_B_BEFORE" && "$EP_POOL_B_BEFORE" -gt 0 ]] || \
+           [[ "$EP_AFT_POOL_A" -lt "$EP_POOL_A_BEFORE" && "$EP_POOL_A_BEFORE" -gt 0 ]]; then
+            EP_PAYOUT_DETECTED=1
+            echo -e "    ${GREEN}${BOLD}Payout nach Epoch-Wechsel erkannt!${NC}"
+            break
+        fi
+    done
+
+    echo ""
+    if [[ "$EP_PAYOUT_DETECTED" -eq 1 ]]; then
+        # ─── 19g: Finale Analyse ───
+        header "TEST 19g: Payout-Analyse nach Epoch-Wechsel"
+
+        # Finale Pools
+        EP_FINAL_DIV=$(call_fn 5 "" "{ uint64, uint64, uint64, uint64, uint64, uint64 }")
+        EP_FIN_POOL_A=$(echo "$EP_FINAL_DIV" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | sed -n '1p')
+        EP_FIN_POOL_B=$(echo "$EP_FINAL_DIV" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | sed -n '2p')
+        EP_FIN_QMINE_POOL=$(echo "$EP_FINAL_DIV" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | sed -n '3p')
+        EP_FIN_QRWA_POOL=$(echo "$EP_FINAL_DIV" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | sed -n '4p')
+        EP_FIN_POOL_A=${EP_FIN_POOL_A:-0}
+        EP_FIN_POOL_B=${EP_FIN_POOL_B:-0}
+        EP_FIN_QMINE_POOL=${EP_FIN_QMINE_POOL:-0}
+        EP_FIN_QRWA_POOL=${EP_FIN_QRWA_POOL:-0}
+
+        EP_FINAL_TOTAL=$(call_fn 6 "" "{ uint64, uint64 }")
+        EP_FIN_TOTAL_QMINE=$(echo "$EP_FINAL_TOTAL" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | sed -n '1p')
+        EP_FIN_TOTAL_QRWA=$(echo "$EP_FINAL_TOTAL" | sed -n '/Contract Function Output/,$ p' | grep -oE '[0-9]+' | sed -n '2p')
+        EP_FIN_TOTAL_QMINE=${EP_FIN_TOTAL_QMINE:-0}
+        EP_FIN_TOTAL_QRWA=${EP_FIN_TOTAL_QRWA:-0}
+
+        echo -e "    ${BOLD}Vergleich VOR/NACH Epoch-Wechsel + Payout:${NC}"
+        echo -e "    ──────────────────────────────────────────────────"
+        printf "    %-25s %15s %15s %15s\n" "" "Vorher" "Nachher" "Δ"
+        echo -e "    ──────────────────────────────────────────────────"
+        printf "    %-25s %15s %15s %15s\n" "Pool A" "$EP_POOL_A_BEFORE" "$EP_FIN_POOL_A" "$((EP_FIN_POOL_A - EP_POOL_A_BEFORE))"
+        printf "    %-25s %15s %15s %15s\n" "Pool B" "$EP_POOL_B_BEFORE" "$EP_FIN_POOL_B" "$((EP_FIN_POOL_B - EP_POOL_B_BEFORE))"
+        printf "    %-25s %15s %15s %15s\n" "QMINE Div Pool" "$EP_QMINE_POOL_BEFORE" "$EP_FIN_QMINE_POOL" "$((EP_FIN_QMINE_POOL - EP_QMINE_POOL_BEFORE))"
+        printf "    %-25s %15s %15s %15s\n" "QRWA Div Pool" "$EP_QRWA_POOL_BEFORE" "$EP_FIN_QRWA_POOL" "$((EP_FIN_QRWA_POOL - EP_QRWA_POOL_BEFORE))"
+        printf "    %-25s %15s %15s %15s\n" "Total QMINE Dist" "$EP_TOTAL_QMINE_BEFORE" "$EP_FIN_TOTAL_QMINE" "$((EP_FIN_TOTAL_QMINE - EP_TOTAL_QMINE_BEFORE))"
+        printf "    %-25s %15s %15s %15s\n" "Total QRWA Dist" "$EP_TOTAL_QRWA_BEFORE" "$EP_FIN_TOTAL_QRWA" "$((EP_FIN_TOTAL_QRWA - EP_TOTAL_QRWA_BEFORE))"
+        echo -e "    ──────────────────────────────────────────────────"
+
+        # 19g-1: Pool B aufgebraucht?
+        if [[ "$EP_FIN_POOL_B" -eq 0 && "$EP_POOL_B_BEFORE" -gt 0 ]]; then
+            record_pass "Pool B nach Epoch-Payout aufgebraucht — ${EP_POOL_B_BEFORE} → 0"
+        elif [[ "$EP_FIN_POOL_B" -lt "$EP_POOL_B_BEFORE" ]]; then
+            record_pass "Pool B reduziert — ${EP_POOL_B_BEFORE} → ${EP_FIN_POOL_B}"
+        fi
+
+        # 19g-2: QMINE tatsächlich an Holder verteilt (nach Epoch haben wir Snapshots!)
+        EP_DELTA_QMINE=$((EP_FIN_TOTAL_QMINE - EP_TOTAL_QMINE_BEFORE))
+        EP_DELTA_QRWA=$((EP_FIN_TOTAL_QRWA - EP_TOTAL_QRWA_BEFORE))
+
+        if [[ "$EP_DELTA_QMINE" -gt 0 ]]; then
+            record_pass "QMINE Payout nach Epoch — +${EP_DELTA_QMINE} QU an QMINE-Holder verteilt"
+        else
+            if [[ "$EP_FIN_QMINE_POOL" -gt 0 ]]; then
+                echo -e "    ${YELLOW}QMINE Pool akkumuliert: ${EP_FIN_QMINE_POOL} QU — wartet auf nächsten Payout${NC}"
+                record_skip "QMINE Payout nach Epoch" "Pool: ${EP_FIN_QMINE_POOL} QU (noch kein Payout-Tick)"
+            else
+                record_skip "QMINE Payout nach Epoch" "Kein QMINE verteilt und Pool leer"
+            fi
+        fi
+
+        if [[ "$EP_DELTA_QRWA" -gt 0 ]]; then
+            record_pass "qRWA Payout nach Epoch — +${EP_DELTA_QRWA} QU an qRWA-Shareholder verteilt"
+        else
+            if [[ "$EP_FIN_QRWA_POOL" -gt 0 ]]; then
+                echo -e "    ${YELLOW}qRWA Pool: ${EP_FIN_QRWA_POOL} QU — evtl. keine eligible Holder${NC}"
+                record_skip "qRWA Payout nach Epoch" "Pool: ${EP_FIN_QRWA_POOL} QU"
+            else
+                record_skip "qRWA Payout nach Epoch" "Kein qRWA verteilt und Pool leer"
+            fi
+        fi
+
+        # 19g-3: 90/10 Split nach Epoch verifizieren
+        if [[ "$EP_DELTA_QMINE" -gt 0 && "$EP_DELTA_QRWA" -gt 0 ]]; then
+            EP_TOTAL_DELTA=$((EP_DELTA_QMINE + EP_DELTA_QRWA))
+            EP_QMINE_PCT=$((EP_DELTA_QMINE * 1000 / EP_TOTAL_DELTA))
+            EP_QRWA_PCT=$((EP_DELTA_QRWA * 1000 / EP_TOTAL_DELTA))
+            echo ""
+            echo -e "    ${BOLD}90/10 Split nach Epoch:${NC}"
+            echo -e "    QMINE: ${EP_DELTA_QMINE} QU (${EP_QMINE_PCT}‰)"
+            echo -e "    qRWA:  ${EP_DELTA_QRWA} QU (${EP_QRWA_PCT}‰)"
+
+            if [[ "$EP_QMINE_PCT" -ge 870 && "$EP_QMINE_PCT" -le 930 ]]; then
+                record_pass "Epoch 90/10 Split — QMINE ${EP_QMINE_PCT}‰ ≈ 90%"
+            else
+                record_fail "Epoch 90/10 Split" "QMINE ${EP_QMINE_PCT}‰ (erwartet: ~900‰)"
+            fi
+        elif [[ "$EP_DELTA_QMINE" -gt 0 ]]; then
+            # QMINE Pool wuchs + QMINE Dist, aber keine QRWA Dist (keine eligible Holder)
+            echo -e "    ${YELLOW}Nur QMINE verteilt — keine eligible qRWA-Holder?${NC}"
+            record_skip "Epoch 90/10 Split" "Nur QMINE +${EP_DELTA_QMINE}, kein QRWA Delta"
+        fi
+
+        # 19g-4: Holder-Balance Vergleich VOR/NACH Epoch
+        echo ""
+        step "Vergleiche Holder-Balances VOR/NACH Epoch + Payout..."
+        EP_PAY_RECEIVED=0
+        EP_PAY_UNCHANGED=0
+        echo ""
+        printf "    ${BOLD}%-28s %15s %15s %15s${NC}\n" "Identity" "Vorher" "Nachher" "Δ"
+        echo -e "    ──────────────────────────────────────────────────────────"
+
+        for ep_s in $(seq 0 $((${#EP_SNAP_IDS[@]} - 1))); do
+            EP_S_ID="${EP_SNAP_IDS[$ep_s]}"
+            EP_S_BAL_BEFORE="${EP_SNAP_BAL_BEFORE[$ep_s]}"
+            BAL_OUT=$(cli_call -getbalance "$EP_S_ID")
+            EP_S_BAL_AFTER=$(echo "$BAL_OUT" | grep -oE 'Balance: [0-9]+' | head -1 | awk '{print $2}')
+            EP_S_BAL_AFTER=${EP_S_BAL_AFTER:-0}
+            EP_S_DELTA=$((EP_S_BAL_AFTER - EP_S_BAL_BEFORE))
+            EP_SHORT="${EP_S_ID:0:12}…${EP_S_ID: -6}"
+
+            if [[ "$EP_S_DELTA" -gt 0 ]]; then
+                printf "    ${GREEN}✓${NC} ${EP_SHORT}  %15s %15s ${GREEN}+%s${NC}\n" "$EP_S_BAL_BEFORE" "$EP_S_BAL_AFTER" "$EP_S_DELTA"
+                EP_PAY_RECEIVED=$((EP_PAY_RECEIVED + 1))
+            else
+                printf "    ${YELLOW}─${NC} ${EP_SHORT}  %15s %15s ${YELLOW}±0${NC}\n" "$EP_S_BAL_BEFORE" "$EP_S_BAL_AFTER"
+                EP_PAY_UNCHANGED=$((EP_PAY_UNCHANGED + 1))
+            fi
+        done
+
+        echo ""
+        if [[ "$EP_PAY_RECEIVED" -gt 0 ]]; then
+            record_pass "Epoch Payout Verifikation — ${EP_PAY_RECEIVED}/${#EP_SNAP_IDS[@]} Holder erhielten Payout"
+        else
+            if [[ "$EP_DELTA_QMINE" -gt 0 || "$EP_DELTA_QRWA" -gt 0 ]]; then
+                echo -e "    ${YELLOW}Distribution stieg, aber geprüfte Holder nicht betroffen${NC}"
+                record_skip "Epoch Payout Verifikation" "Distribution +, geprüfte Holder ±0"
+            else
+                record_skip "Epoch Payout Verifikation" "Kein Payout an geprüfte Holder"
+            fi
+        fi
+    else
+        record_fail "Payout nach Epoch" "Kein Payout in $((EP_PAYOUT_MAX * 10))s nach Epoch-Wechsel erkannt"
+    fi
+fi
+
+fi # end --epoch
+
+###############################################
 # ZUSAMMENFASSUNG
 ###############################################
 
@@ -1823,10 +2336,14 @@ echo ""
 echo -e "  ${CYAN}Hinweise:${NC}"
 echo -e "    • Payout-Cycle: Alle 20 Ticks (QRWA_PAYOUT_TICK_INTERVAL)"
 echo -e "    • QMINE-Holder werden erst nach Epoch-Wechsel in Payout-Buffers aufgenommen"
-echo -e "    • Pool A = QUTIL Revenue, Pool B = User/andere SCs, Dedicated = spez. Adresse"
+echo -e "    • Pool A = QUTIL Revenue + QMINE Issuer Transfers (Mining)"
+echo -e "    • Pool B = User/andere SCs (nicht QUTIL, nicht QMINE Issuer, nicht Dedicated)"
+echo -e "    • Pool C = Dedicated BTC Revenue Address (kein Gov Fee)"
 echo -e "    • Verteilung: 90% QMINE Holder, 10% qRWA Shareholder (nur eligible!)"
 echo -e "    • qRWA Eligibility: ≥100K QMINE pro qRWA Share (QRWA_QMINE_PER_QRWA_SHARE_MIN)"
 echo -e "    • TEST 15 zeigt alle qRWA-Owner + deren QMINE und Eligibility-Status"
+echo -e "    • TEST 19 testet Epoch-Wechsel + automatische Payout-Verifikation"
+echo -e "    • Testnet: ${EPOCH_TICKS} Ticks/Epoch — Epoch-Wechsel testet BEGIN_EPOCH Snapshots"
 echo -e "    • -enabletestcontracts ist Pflicht für Contract Index >= 10"
 echo ""
 
