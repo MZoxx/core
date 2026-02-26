@@ -1305,6 +1305,7 @@ public:
         QRWALogger logger;
         id holder;
         uint64 existingBalance;
+        id newDedicatedAddr;
     };
     BEGIN_EPOCH_WITH_LOCALS()
     {
@@ -1336,17 +1337,15 @@ public:
 
         // Migration: update mDedicatedRevenueAddress to new Pool C address
         // Testnet: WFCELJRTMTYEGHNTYONQOWVQIUYBVBPTSIRCOTJUXFIQAQPEYJQGQQSAVDDM
+        locals.newDedicatedAddr = ID(
+            _W, _F, _C, _E, _L, _J, _R, _T, _M, _T, _Y, _E, _G, _H, _N, _T,
+            _Y, _O, _N, _Q, _O, _W, _V, _Q, _I, _U, _Y, _B, _V, _B, _P, _T,
+            _S, _I, _R, _C, _O, _T, _J, _U, _X, _F, _I, _Q, _A, _Q, _P, _E,
+            _Y, _J, _Q, _G, _Q, _Q, _S, _A
+        );
+        if (state.mDedicatedRevenueAddress != locals.newDedicatedAddr)
         {
-            id newDedicatedAddr = ID(
-                _W, _F, _C, _E, _L, _J, _R, _T, _M, _T, _Y, _E, _G, _H, _N, _T,
-                _Y, _O, _N, _Q, _O, _W, _V, _Q, _I, _U, _Y, _B, _V, _B, _P, _T,
-                _S, _I, _R, _C, _O, _T, _J, _U, _X, _F, _I, _Q, _A, _Q, _P, _E,
-                _Y, _J, _Q, _G, _Q, _Q, _S, _A
-            );
-            if (state.mDedicatedRevenueAddress != newDedicatedAddr)
-            {
-                state.mDedicatedRevenueAddress = newDedicatedAddr;
-            }
+            state.mDedicatedRevenueAddress = locals.newDedicatedAddr;
         }
 
         // Reset new poll counters
