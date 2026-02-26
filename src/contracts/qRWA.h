@@ -516,6 +516,21 @@ public:
             return;
         }
 
+        // Only QMINE treasury releases are allowed via vote.
+        // SC shares (general assets) are permanently locked.
+        if (input.asset.issuer != state.mQmineAsset.issuer || input.asset.assetName != state.mQmineAsset.assetName)
+        {
+            output.status = QRWA_STATUS_FAILURE_INVALID_INPUT;
+            locals.logger.logType = QRWA_LOG_TYPE_ERROR;
+            locals.logger.valueB = output.status;
+            LOG_INFO(locals.logger);
+            if (qpi.invocationReward() > 0)
+            {
+                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            }
+            return;
+        }
+
         locals.newPollIndex = mod(state.mCurrentAssetProposalId, QRWA_MAX_ASSET_POLLS);
 
         // Create and store the new poll, overwriting the oldest one
@@ -1660,7 +1675,7 @@ public:
                 locals.sufficientFunds = 0;
 
 
-                if (locals.yesVotes >= locals.quorumThreshold) // YES wins
+                if (locals.yesVotes > locals.noVotes) // Simple majority: YES > NO
                 {
                     // Check if asset is QMINE treasury
                     if (locals.poll.asset.issuer == state.mQmineAsset.issuer && locals.poll.asset.assetName == state.mQmineAsset.assetName)
@@ -2088,7 +2103,7 @@ public:
                     state.mQmineDividendPool = locals.qmineDividendPool_128.low;
                 } // End QMINE distribution
 
-                // Distribute qRWA shareholder rewards (Pool B — requires QMINE > 0, no 100K minimum per share)
+                // Distribute qRWA shareholder rewards (Pool B — all qRWA holders, no QMINE requirement)
                 if (state.mQRWADividendPool > 0)
                 {
                     locals.qrwaAsset.issuer = id::zero();
@@ -2111,18 +2126,6 @@ public:
                         }
                         // Exclude fundraising address
                         if (state.mFundraisingAddress != NULL_ID && locals.holder == state.mFundraisingAddress)
-                        {
-                            continue;
-                        }
-
-                        // Must hold at least 1 QMINE to be eligible
-                        locals.qmineBalance = qpi.numberOfShares(
-                            state.mQmineAsset,
-                            AssetOwnershipSelect::byOwner(locals.holder),
-                            AssetPossessionSelect::byPossessor(locals.holder)
-                        );
-
-                        if (locals.qmineBalance <= 0)
                         {
                             continue;
                         }
@@ -2153,18 +2156,6 @@ public:
                                 }
                                 // Exclude fundraising address
                                 if (state.mFundraisingAddress != NULL_ID && locals.holder == state.mFundraisingAddress)
-                                {
-                                    continue;
-                                }
-
-                                // Must hold at least 1 QMINE to be eligible
-                                locals.qmineBalance = qpi.numberOfShares(
-                                    state.mQmineAsset,
-                                    AssetOwnershipSelect::byOwner(locals.holder),
-                                    AssetPossessionSelect::byPossessor(locals.holder)
-                                );
-
-                                if (locals.qmineBalance <= 0)
                                 {
                                     continue;
                                 }
