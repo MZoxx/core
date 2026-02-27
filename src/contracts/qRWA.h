@@ -60,13 +60,16 @@ constexpr uint64 QRWA_LOG_TYPE_ERROR = 8;
 constexpr uint64 QRWA_LOG_TYPE_INCOMING_REVENUE_A = 9;
 constexpr uint64 QRWA_LOG_TYPE_INCOMING_REVENUE_B = 10;
 constexpr uint64 QRWA_LOG_TYPE_INCOMING_REVENUE_DEDICATED = 11;
+constexpr uint64 QRWA_LOG_TYPE_PAYOUT_QMINE_HOLDER = 12; // valueA=amount, valueB=eligible QMINE count
+constexpr uint64 QRWA_LOG_TYPE_PAYOUT_QRWA_HOLDER = 13; // valueA=amount, valueB=qRWA shares
+constexpr uint64 QRWA_LOG_TYPE_PAYOUT_DEDICATED_QRWA = 14; // valueA=amount, valueB=qRWA shares (Pool C leg)
 
 // Ring buffer for tracking the last N individual payouts (queryable via GetLatestPayouts = fn 11)
 constexpr uint64 QRWA_PAYOUT_RING_SIZE = 1024; // Must be a power of 2
 constexpr uint8 QRWA_PAYOUT_TYPE_QMINE_HOLDER    = 0; // Regular QMINE holder payout
 constexpr uint8 QRWA_PAYOUT_TYPE_QMINE_DEV       = 1; // Dev address gets reducer's portion
 constexpr uint8 QRWA_PAYOUT_TYPE_QRWA_HOLDER     = 2; // qRWA shareholder (Pool B)
-constexpr uint8 QRWA_PAYOUT_TYPE_DEDICATED_QRWA  = 3; // Dedicated qRWA pool holder
+constexpr uint8 QRWA_PAYOUT_TYPE_DEDICATED_QRWA  = 3; // Pool C (BTC Mining) dedicated qRWA holder leg
 
 
 /***************************************************/
@@ -214,14 +217,14 @@ protected:
     // Dividend Pools
     uint64 mRevenuePoolA; // Mined funds from Qubic farm (from SCs)
     uint64 mRevenuePoolB; // Other dividend funds (from user wallets)
-    uint64 mDedicatedRevenuePool; // Revenue from designated address
+    uint64 mDedicatedRevenuePool; // Pool C (BTC Mining) revenue from dedicated address
 
     // Processed dividend pools awaiting distribution
     uint64 mQmineDividendPool; // QUs for QMINE holders
     uint64 mQRWADividendPool; // QUs for qRWA shareholders
-    uint64 mDedicatedQRWADividendPool; // QUs for eligible qRWA shareholders
+    uint64 mDedicatedQRWADividendPool; // QUs for eligible Pool C qRWA shareholders (Pool C also feeds QMINE via mQmineDividendPool)
 
-    // Dedicated revenue configuration
+    // Pool C (BTC Mining) revenue configuration
     id mDedicatedRevenueAddress;
 
     // Pool A revenue address (QMINE issuer or configured mining address)
@@ -2013,7 +2016,7 @@ public:
                     state.mRevenuePoolB = 0;
                 }
 
-                // Allocate dedicated revenue pool
+                // Allocate Pool C (BTC Mining) revenue pool: split into QMINE leg + dedicated qRWA leg
                 if (state.mDedicatedRevenuePool > 0)
                 {
                     locals.dedicatedQminePayout = div<uint64>(smul(state.mDedicatedRevenuePool, QRWA_QMINE_HOLDER_PERCENT), QRWA_PERCENT_DENOMINATOR);
@@ -2083,6 +2086,12 @@ public:
                                         locals.payoutEntry.payoutType = QRWA_PAYOUT_TYPE_QMINE_HOLDER;
                                         state.mLatestPayouts.set(state.mLatestPayoutsNextIdx, locals.payoutEntry);
                                         state.mLatestPayoutsNextIdx = (state.mLatestPayoutsNextIdx + 1) & (QRWA_PAYOUT_RING_SIZE - 1);
+                                        locals.logger.contractId = CONTRACT_INDEX;
+                                        locals.logger.logType = QRWA_LOG_TYPE_PAYOUT_QMINE_HOLDER;
+                                        locals.logger.primaryId = locals.holder;
+                                        locals.logger.valueA = locals.payout_u64;
+                                        locals.logger.valueB = locals.eligibleBalance;
+                                        LOG_INFO(locals.logger);
                                     }
                                     else
                                     {
@@ -2112,6 +2121,12 @@ public:
                                         locals.payoutEntry.payoutType = QRWA_PAYOUT_TYPE_QMINE_HOLDER;
                                         state.mLatestPayouts.set(state.mLatestPayoutsNextIdx, locals.payoutEntry);
                                         state.mLatestPayoutsNextIdx = (state.mLatestPayoutsNextIdx + 1) & (QRWA_PAYOUT_RING_SIZE - 1);
+                                        locals.logger.contractId = CONTRACT_INDEX;
+                                        locals.logger.logType = QRWA_LOG_TYPE_PAYOUT_QMINE_HOLDER;
+                                        locals.logger.primaryId = locals.holder;
+                                        locals.logger.valueA = locals.payout_u64;
+                                        locals.logger.valueB = locals.eligibleBalance;
+                                        LOG_INFO(locals.logger);
                                     }
                                     else
                                     {
@@ -2230,6 +2245,12 @@ public:
                                         locals.payoutEntry.payoutType = QRWA_PAYOUT_TYPE_QRWA_HOLDER;
                                         state.mLatestPayouts.set(state.mLatestPayoutsNextIdx, locals.payoutEntry);
                                         state.mLatestPayoutsNextIdx = (state.mLatestPayoutsNextIdx + 1) & (QRWA_PAYOUT_RING_SIZE - 1);
+                                        locals.logger.contractId = CONTRACT_INDEX;
+                                        locals.logger.logType = QRWA_LOG_TYPE_PAYOUT_QRWA_HOLDER;
+                                        locals.logger.primaryId = locals.holder;
+                                        locals.logger.valueA = locals.payout_u64;
+                                        locals.logger.valueB = locals.qrwaShares;
+                                        LOG_INFO(locals.logger);
                                     }
                                     else
                                     {
@@ -2255,7 +2276,7 @@ public:
                     }
                 }
 
-                // Distribute dedicated qRWA rewards to eligible shareholders (requires >= 100K QMINE per qRWA share)
+                // Distribute dedicated qRWA leg of Pool C to eligible shareholders (requires >= 100K QMINE per qRWA share)
                 if (state.mDedicatedQRWADividendPool > 0)
                 {
                     locals.qrwaAsset.issuer = id::zero();
@@ -2353,6 +2374,12 @@ public:
                                         locals.payoutEntry.payoutType = QRWA_PAYOUT_TYPE_DEDICATED_QRWA;
                                         state.mLatestPayouts.set(state.mLatestPayoutsNextIdx, locals.payoutEntry);
                                         state.mLatestPayoutsNextIdx = (state.mLatestPayoutsNextIdx + 1) & (QRWA_PAYOUT_RING_SIZE - 1);
+                                        locals.logger.contractId = CONTRACT_INDEX;
+                                        locals.logger.logType = QRWA_LOG_TYPE_PAYOUT_DEDICATED_QRWA;
+                                        locals.logger.primaryId = locals.holder;
+                                        locals.logger.valueA = locals.payout_u64;
+                                        locals.logger.valueB = locals.qrwaShares;
+                                        LOG_INFO(locals.logger);
                                     }
                                     else
                                     {
