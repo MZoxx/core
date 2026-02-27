@@ -62,7 +62,7 @@ constexpr uint64 QRWA_LOG_TYPE_INCOMING_REVENUE_B = 10;
 constexpr uint64 QRWA_LOG_TYPE_INCOMING_REVENUE_DEDICATED = 11;
 
 // Ring buffer for tracking the last N individual payouts (queryable via GetLatestPayouts = fn 11)
-constexpr uint64 QRWA_PAYOUT_RING_SIZE = 64; // Must be a power of 2
+constexpr uint64 QRWA_PAYOUT_RING_SIZE = 1024; // Must be a power of 2
 constexpr uint8 QRWA_PAYOUT_TYPE_QMINE_HOLDER    = 0; // Regular QMINE holder payout
 constexpr uint8 QRWA_PAYOUT_TYPE_QMINE_DEV       = 1; // Dev address gets reducer's portion
 constexpr uint8 QRWA_PAYOUT_TYPE_QRWA_HOLDER     = 2; // qRWA shareholder (Pool B)
@@ -236,7 +236,7 @@ protected:
 
     // Ring buffer of the last QRWA_PAYOUT_RING_SIZE individual payouts (queryable via GetLatestPayouts)
     Array<QRWAPayoutEntry, QRWA_PAYOUT_RING_SIZE> mLatestPayouts;
-    uint8 mLatestPayoutsNextIdx;
+    uint16 mLatestPayoutsNextIdx;
 
 public:
     /***************************************************/
@@ -1204,12 +1204,12 @@ public:
 
     // GetLatestPayouts (fn 11): Returns the ring buffer of the last QRWA_PAYOUT_RING_SIZE individual payouts.
     // nextIdx points to the NEXT write position (= oldest entry if buffer is full).
-    // Parse order: entries from nextIdx..nextIdx-1 (mod 64), oldest first → newest last.
+    // Parse order: entries from nextIdx..nextIdx-1 (mod QRWA_PAYOUT_RING_SIZE), oldest first → newest last.
     struct GetLatestPayouts_input {};
     struct GetLatestPayouts_output
     {
         Array<QRWAPayoutEntry, QRWA_PAYOUT_RING_SIZE> payouts;
-        uint8 nextIdx; // Next write index (oldest entry position when buffer is full)
+        uint16 nextIdx; // Next write index (oldest entry position when buffer is full)
     };
     PUBLIC_FUNCTION(GetLatestPayouts)
     {
