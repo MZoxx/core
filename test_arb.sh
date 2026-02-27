@@ -432,46 +432,40 @@ info "Sende ${REVENUE_SEND} QU an qRWA (Pool B input)"
 send_tx_with_retry "Revenue Send 20B -> qRWA" "$SEED_B" \
   -sendtoaddress "$QRWA_IDENTITY" "$REVENUE_SEND"
 
-header "Phase 4 — E2 prüfen (Vergleich mit E0)"
+# ── E1-End-Snapshot ───────────────────────────────────────────────────────────
+# Payout findet in BEGIN_EPOCH der neuen Epoch statt — NICHT in END_TICK.
+# Daher: Baseline am Ende von E1 nehmen, Vergleich nach dem Epoch-Wechsel.
+step "E1-End-Snapshot (Baseline vor Epoch-Wechsel)"
+DEV_BAL_E1_END=$(get_balance_of "$DEV_ID")
+A_QU_E1_END=$(get_balance_of "$ID_A")
+B_QU_E1_END=$(get_balance_of "$ID_B")
+read -r QM_DIST_E1_END QRWA_DIST_E1_END <<< "$(get_total_distributed)"
+info "E1-End — Dev: ${DEV_BAL_E1_END}  A: ${A_QU_E1_END}  B: ${B_QU_E1_END}"
+info "E1-End totalQmineDistributed=${QM_DIST_E1_END}  totalQRWADistributed=${QRWA_DIST_E1_END}"
+
+header "Phase 4 — E2 prüfen (BEGIN_EPOCH-Payout)"
 read -r _ EP_E2 <<< "$(wait_for_next_epoch)"
 info "Jetzt in E2: ${EP_E2}"
 
-# ----- Enger Vor/Nach-Snapshot für präzise Payout-Messung pro Adresse -----
-# qpi.transfer() vom Contract erscheint NICHT als User-TX → einziger Weg ist
-# Balance-Delta in engem Fenster (vor erstem END_TICK mit Pool-Ausschüttung).
-step "Snapshot VORHER (direkt nach E2-Start, vor erstem Payout-Tick)"
-DEV_BAL_E2_BEFORE=$(get_balance_of "$DEV_ID")
-A_QU_E2_BEFORE=$(get_balance_of "$ID_A")
-B_QU_E2_BEFORE=$(get_balance_of "$ID_B")
-info "VORHER — Dev: ${DEV_BAL_E2_BEFORE}  A: ${A_QU_E2_BEFORE}  B: ${B_QU_E2_BEFORE}"
+# BEGIN_EPOCH hat bereits alles ausbezahlt — der erste Snapshot nach dem
+# Epoch-Wechsel IST der "nach Payout"-Stand. Keine weiteren Ticks nötig.
+step "E2-Start Snapshot (nach BEGIN_EPOCH — Payouts bereits durchgeführt)"
+DEV_BAL_E2_START=$(get_balance_of "$DEV_ID")
+A_QU_E2_START=$(get_balance_of "$ID_A")
+B_QU_E2_START=$(get_balance_of "$ID_B")
+info "E2-Start — Dev: ${DEV_BAL_E2_START}  A: ${A_QU_E2_START}  B: ${B_QU_E2_START}"
 
-step "Pool-Balances @E2-Start (GetDividendBalances + GetTotalDistributed)"
+# Delta = E2-Start minus E1-End  →  erfasst genau den BEGIN_EPOCH-Payout
+DELTA_DEV_PAYOUT=$((DEV_BAL_E2_START  - DEV_BAL_E1_END))
+DELTA_A_PAYOUT=$((A_QU_E2_START       - A_QU_E1_END))
+DELTA_B_PAYOUT=$((B_QU_E2_START       - B_QU_E1_END))
+
+step "Pool-Balances @E2-Start (nach BEGIN_EPOCH Ausschüttung)"
 read -r RPA_E2 RPB_E2 QM_POOL_E2 QRWA_POOL_E2 <<< "$(get_dividend_balances)"
 read -r QM_DIST_E2 QRWA_DIST_E2 <<< "$(get_total_distributed)"
 info "E2 revenuePoolA=${RPA_E2}  revenuePoolB=${RPB_E2}"
 info "E2 qmineDividendPool=${QM_POOL_E2}  qrwaDividendPool=${QRWA_POOL_E2}"
 info "E2 totalQmineDistributed=${QM_DIST_E2}  totalQRWADistributed=${QRWA_DIST_E2}"
-
-# Warte 3 Ticks — in diesem Fenster feuert END_TICK min. 1× und verteilt
-# den gesamten qmineDividendPool an alle QMINE-Holder.
-wait_n_ticks 3
-
-step "Snapshot NACHHER (nach ≥1× END_TICK Payout)"
-DEV_BAL_E2_AFTER=$(get_balance_of "$DEV_ID")
-A_QU_E2_AFTER=$(get_balance_of "$ID_A")
-B_QU_E2_AFTER=$(get_balance_of "$ID_B")
-info "NACHHER — Dev: ${DEV_BAL_E2_AFTER}  A: ${A_QU_E2_AFTER}  B: ${B_QU_E2_AFTER}"
-
-# Enge Deltas = eingehende Contract-Zahlung im Payout-Tick-Fenster
-DELTA_DEV_PAYOUT=$((DEV_BAL_E2_AFTER  - DEV_BAL_E2_BEFORE))
-DELTA_A_PAYOUT=$((A_QU_E2_AFTER       - A_QU_E2_BEFORE))
-DELTA_B_PAYOUT=$((B_QU_E2_AFTER       - B_QU_E2_BEFORE))
-
-# Zusätzlich: Pool-State nach Payout (zeigt ob Pool leergelaufen ist)
-step "Pool-Balances nach Payout-Ticks"
-read -r RPA_POST RPB_POST QM_POOL_POST QRWA_POOL_POST <<< "$(get_dividend_balances)"
-read -r QM_DIST_POST QRWA_DIST_POST <<< "$(get_total_distributed)"
-info "POST qmineDividendPool=${QM_POOL_POST}  totalQmineDistributed=${QM_DIST_POST}"
 
 # Ring-Buffer abfragen: GetLatestPayouts (fn 11)
 # Jeder erfolgreiche qpi.transfer() schreibt einen Eintrag mit recipient, amount, tick, payoutType.
@@ -494,7 +488,7 @@ B_QMINE_AFTER_E2=${B_QMINE_AFTER_E2:-0}
 info "QMINE in E2: A=${A_QMINE_AFTER_E2}, B=${B_QMINE_AFTER_E2}"
 
 # Breiter Dev-Delta E0→E2 (als Sanity-Check)
-DEV_BAL_E2=${DEV_BAL_E2_AFTER}
+DEV_BAL_E2=${DEV_BAL_E2_START}
 DELTA_E0_E2=$((DEV_BAL_E2 - DEV_BAL_E0))
 
 header "Ergebnis"
@@ -502,26 +496,26 @@ echo "Dev balance E0 (breit):       ${DEV_BAL_E0}"
 echo "Dev balance E2 (breit):       ${DEV_BAL_E2}"
 echo "Delta Dev E0->E2 (breit):     ${DELTA_E0_E2}  (Sanity: diverse Faktoren enthalten)"
 echo ""
-echo "=== Enge Payout-Deltas (vor/nach Payout-Tick-Fenster in E2) ==="
-echo "Delta Dev  (E2 eng):  ${DELTA_DEV_PAYOUT}  (erwartet: > 0 — A's Anteil)"
-echo "Delta A QU (E2 eng):  ${DELTA_A_PAYOUT}    (erwartet: ≤ 0 — kein Payout, da EndBalance=0)"
-echo "Delta B QU (E2 eng):  ${DELTA_B_PAYOUT}    (erwartet: > 0 — normaler QMINE-Payout)"
+echo "=== Payout-Deltas (E1-End → E2-Start, BEGIN_EPOCH-Fenster) ==="
+echo "Delta Dev  (E1-End→E2-Start):  ${DELTA_DEV_PAYOUT}  (erwartet: > 0 — A's Anteil)"
+echo "Delta A QU (E1-End→E2-Start):  ${DELTA_A_PAYOUT}    (erwartet: ≤ 0 — kein Payout, da EndBalance=0)"
+echo "Delta B QU (E1-End→E2-Start):  ${DELTA_B_PAYOUT}    (erwartet: > 0 — normaler QMINE-Payout)"
 echo ""
-echo "qmineDividendPool vor Payout: ${QM_POOL_E2}   nach: ${QM_POOL_POST}"
-echo "totalQmineDistributed:        ${QM_DIST_E2} → ${QM_DIST_POST}  (Delta: $((QM_DIST_POST - QM_DIST_E2)))"
+echo "qmineDividendPool @E2-Start (nach BEGIN_EPOCH): ${QM_POOL_E2}  (erwartet: 0 = vollständig ausgeschüttet)"
+echo "totalQmineDistributed:  E1-End ${QM_DIST_E1_END} → E2-Start ${QM_DIST_E2}  (Delta: $((QM_DIST_E2 - QM_DIST_E1_END)))"
 echo ""
 echo "--- Pool B (qRWA-Holder) ---"
 echo "revenuePoolB   E0→E2:         ${RPB_E0} → ${RPB_E2}"
 echo "qrwaDividendPool E0→E2:       ${QRWA_POOL_E0} → ${QRWA_POOL_E2}"
-echo "totalQRWADistributed E0→E2:   ${QRWA_DIST_E0} → ${QRWA_DIST_E2}"
-DELTA_QRWA_DIST=$((QRWA_DIST_E2 - QRWA_DIST_E0))
+echo "totalQRWADistributed  E1-End→E2-Start: ${QRWA_DIST_E1_END} → ${QRWA_DIST_E2}"
+DELTA_QRWA_DIST=$((QRWA_DIST_E2 - QRWA_DIST_E1_END))
 echo "Delta totalQRWADistributed:   ${DELTA_QRWA_DIST}  (erwartet: > 0 wenn qRWA-Holder vorhanden)"
 
-# Dev bekommt A's Anteil (enger Snapshot)
+# Dev bekommt A's Anteil (BEGIN_EPOCH-Delta)
 if [[ "$DELTA_DEV_PAYOUT" -gt 0 ]]; then
-  pass "Dev income sichtbar im Payout-Fenster (eng: +${DELTA_DEV_PAYOUT})"
+  pass "Dev income sichtbar (E1→E2: +${DELTA_DEV_PAYOUT})"
 else
-  fail "Dev income" "Keine Balance-Erhöhung im Payout-Tick-Fenster (delta=${DELTA_DEV_PAYOUT})"
+  fail "Dev income" "Keine Balance-Erhöhung (delta=${DELTA_DEV_PAYOUT}) — kein Revenue oder kein Holder"
 fi
 
 # A hat verkauft → EndBalance=0 → kein Payout
@@ -531,20 +525,20 @@ else
   fail "Seed A Payout" "A erhielt trotz Null-EndBalance einen Payout: ${DELTA_A_PAYOUT}"
 fi
 
-# B hat gehalten → normaler Payout (enger Snapshot)
+# B hat gehalten → normaler Payout
 if [[ "$DELTA_B_PAYOUT" -gt 0 ]]; then
-  pass "Seed B QMINE-Payout korrekt (eng: +${DELTA_B_PAYOUT})"
+  pass "Seed B QMINE-Payout korrekt (E1→E2: +${DELTA_B_PAYOUT})"
 else
-  fail "Seed B Payout" "B hat im Payout-Fenster keinen Payout erhalten (delta=${DELTA_B_PAYOUT})"
+  fail "Seed B Payout" "B hat keinen Payout erhalten (delta=${DELTA_B_PAYOUT})"
 fi
 
-# QMINE-Pool sollte nach Payout leer sein (oder kleiner als vorher)
-QM_POOL_POST_INT=$(( QM_POOL_POST + 0 ))
-QM_POOL_E2_INT=$(( QM_POOL_E2 + 0 ))
-if [[ "$QM_POOL_POST_INT" -lt "$QM_POOL_E2_INT" ]]; then
-  pass "qmineDividendPool wurde reduziert (${QM_POOL_E2_INT} → ${QM_POOL_POST_INT})"
+# qmineDividendPool nach BEGIN_EPOCH sollte 0 sein (vollständig ausgeschüttet)
+# UND totalQmineDistributed muss gestiegen sein
+QM_DIST_DELTA=$((QM_DIST_E2 - QM_DIST_E1_END))
+if [[ "$QM_DIST_DELTA" -gt 0 ]]; then
+  pass "totalQmineDistributed gestiegen (+${QM_DIST_DELTA}) — BEGIN_EPOCH hat ausgeschüttet"
 else
-  fail "Pool-Drain" "qmineDividendPool nicht reduziert (${QM_POOL_E2_INT} → ${QM_POOL_POST_INT})"
+  fail "Pool-Drain" "totalQmineDistributed unverändert (E1-End=${QM_DIST_E1_END}, E2-Start=${QM_DIST_E2})"
 fi
 
 if [[ "$A_QMINE_AFTER_E2" -lt "$A_QMINE_BEFORE" ]]; then
