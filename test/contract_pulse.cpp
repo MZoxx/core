@@ -70,9 +70,16 @@ namespace
 } // namespace
 
 // Test helper class exposing internal state
-class PULSEChecker : public PULSE
+class PULSEChecker : public PULSE, public PULSE::StateData
 {
 public:
+	const QPI::ContractState<StateData, PULSE_CONTRACT_INDEX>& asState() const {
+		return *reinterpret_cast<const QPI::ContractState<StateData, PULSE_CONTRACT_INDEX>*>(static_cast<const StateData*>(this));
+	}
+	QPI::ContractState<StateData, PULSE_CONTRACT_INDEX>& asMutState() {
+		return *reinterpret_cast<QPI::ContractState<StateData, PULSE_CONTRACT_INDEX>*>(static_cast<StateData*>(this));
+	}
+
 	uint64 getTicketCounter() const { return ticketCounter; }
 	uint64 getTicketPriceInternal() const { return ticketPrice; }
 	uint64 getQHeartHoldLimitInternal() const { return qheartHoldLimit; }
@@ -83,7 +90,6 @@ public:
 	uint8 getBurnPercentInternal() const { return burnPercent; }
 	uint8 getShareholdersPercentInternal() const { return shareholdersPercent; }
 	uint8 getRLShareholdersPercentInternal() const { return rlShareholdersPercent; }
-	uint8 getQHeartPercentInternal() const { return qheartPercent; }
 	const id& getTeamAddressInternal() const { return teamAddress; }
 	const Array<uint8, PULSE_WINNING_DIGITS_ALIGNED>& getLastWinningDigits() const { return lastWinningDigits; }
 	Ticket getTicket(uint64 index) const { return tickets.get(index); }
@@ -104,8 +110,8 @@ public:
 		tickets.set(index, ticket);
 	}
 
-	void forceSelling(bool enable) { enableBuyTicket(*this, enable); }
-	bool isSelling() const { return isSellingOpen(*this); }
+	void forceSelling(bool enable) { enableBuyTicket(asMutState(), enable); }
+	bool isSelling() const { return isSellingOpen(asState()); }
 
 	ValidateDigits_output callValidateDigits(const QPI::QpiContextFunctionCall& qpi, const Array<uint8, PULSE_PLAYER_DIGITS_ALIGNED>& digits) const
 	{
@@ -113,7 +119,7 @@ public:
 		ValidateDigits_output output{};
 		ValidateDigits_locals locals{};
 		input.digits = digits;
-		ValidateDigits(qpi, *this, input, output, locals);
+		ValidateDigits(qpi, asState(), input, output, locals);
 		return output;
 	}
 
@@ -123,7 +129,7 @@ public:
 		GetRandomDigits_output output{};
 		GetRandomDigits_locals locals{};
 		input.seed = seed;
-		GetRandomDigits(qpi, *this, input, output, locals);
+		GetRandomDigits(qpi, asState(), input, output, locals);
 		return output;
 	}
 
@@ -133,7 +139,7 @@ public:
 		PrepareRandomTickets_output output{};
 		PrepareRandomTickets_locals locals{};
 		input.count = count;
-		PrepareRandomTickets(qpi, *this, input, output, locals);
+		PrepareRandomTickets(qpi, asMutState(), input, output, locals);
 		return output;
 	}
 
@@ -144,7 +150,7 @@ public:
 		ChargeTicketsFromPlayer_locals locals{};
 		input.player = player;
 		input.count = count;
-		ChargeTicketsFromPlayer(qpi, *this, input, output, locals);
+		ChargeTicketsFromPlayer(qpi, asMutState(), input, output, locals);
 		return output;
 	}
 
@@ -155,7 +161,7 @@ public:
 		AllocateRandomTickets_locals locals{};
 		input.player = player;
 		input.count = count;
-		AllocateRandomTickets(qpi, *this, input, output, locals);
+		AllocateRandomTickets(qpi, asMutState(), input, output, locals);
 		return output;
 	}
 
@@ -164,7 +170,7 @@ public:
 		ProcessAutoTickets_input input{};
 		ProcessAutoTickets_output output{};
 		ProcessAutoTickets_locals locals{};
-		ProcessAutoTickets(qpi, *this, input, output, locals);
+		ProcessAutoTickets(qpi, asMutState(), input, output, locals);
 	}
 
 	GetAutoParticipation_output callGetAutoParticipation(const QPI::QpiContextFunctionCall& qpi) const
@@ -172,7 +178,7 @@ public:
 		GetAutoParticipation_input input{};
 		GetAutoParticipation_output output{};
 		GetAutoParticipation_locals locals{};
-		GetAutoParticipation(qpi, *this, input, output, locals);
+		GetAutoParticipation(qpi, asState(), input, output, locals);
 		return output;
 	}
 
@@ -185,14 +191,14 @@ public:
 		autoParticipants.set(player, entry);
 	}
 
-	uint64 callGetLeftAlignedReward(uint8 matches) const { return getLeftAlignedReward(*this, matches); }
-	uint64 callGetAnyPositionReward(uint8 matches) const { return getAnyPositionReward(*this, matches); }
+	uint64 callGetLeftAlignedReward(uint8 matches) const { return getLeftAlignedReward(asState(), matches); }
+	uint64 callGetAnyPositionReward(uint8 matches) const { return getAnyPositionReward(asState(), matches); }
 	uint64 callComputePrize(const Array<uint8, PULSE_WINNING_DIGITS_ALIGNED>& winning, const Array<uint8, PULSE_PLAYER_DIGITS_ALIGNED>& digits)
 	{
 		Ticket ticket{};
 		ticket.digits = digits;
 		ComputePrize_locals locals{};
-		return computePrize(*this, ticket, winning, locals);
+		return computePrize(asMutState(), ticket, winning, locals);
 	}
 };
 
@@ -418,7 +424,7 @@ public:
 		return output;
 	}
 
-	PULSE::SetFees_output setFees(const id& invocator, uint8 dev, uint8 burn, uint8 shareholders, uint8 rlShareholders, uint8 qheart)
+	PULSE::SetFees_output setFees(const id& invocator, uint8 dev, uint8 burn, uint8 shareholders, uint8 rlShareholders)
 	{
 		ensureUserEnergy(invocator);
 		PULSE::SetFees_input input{};
@@ -426,7 +432,6 @@ public:
 		input.burnPercent = burn;
 		input.shareholdersPercent = shareholders;
 		input.rlShareholdersPercent = rlShareholders;
-		input.qheartPercent = qheart;
 		PULSE::SetFees_output output{};
 		if (!invokeUserProcedure(PULSE_CONTRACT_INDEX, PULSE_PROCEDURE_SET_FEES, input, output, invocator, 0))
 		{
@@ -604,10 +609,10 @@ TEST(ContractPulse_Static, RewardTablesMatchContractConstants)
 	EXPECT_EQ(ctl.state()->callGetLeftAlignedReward(1), 1u * ctl.getTicketPrice().ticketPrice);
 	EXPECT_EQ(ctl.state()->callGetLeftAlignedReward(0), 0u);
 
-	EXPECT_EQ(ctl.state()->callGetAnyPositionReward(6), 150u * ctl.getTicketPrice().ticketPrice);
-	EXPECT_EQ(ctl.state()->callGetAnyPositionReward(5), 30u * ctl.getTicketPrice().ticketPrice);
-	EXPECT_EQ(ctl.state()->callGetAnyPositionReward(4), 8u * ctl.getTicketPrice().ticketPrice);
-	EXPECT_EQ(ctl.state()->callGetAnyPositionReward(3), 2u * ctl.getTicketPrice().ticketPrice);
+	EXPECT_EQ(ctl.state()->callGetAnyPositionReward(6), 100u * ctl.getTicketPrice().ticketPrice);
+	EXPECT_EQ(ctl.state()->callGetAnyPositionReward(5), 10u * ctl.getTicketPrice().ticketPrice);
+	EXPECT_EQ(ctl.state()->callGetAnyPositionReward(4), 3u * ctl.getTicketPrice().ticketPrice);
+	EXPECT_EQ(ctl.state()->callGetAnyPositionReward(3), 1u * ctl.getTicketPrice().ticketPrice);
 	EXPECT_EQ(ctl.state()->callGetAnyPositionReward(2), 0u);
 	EXPECT_EQ(ctl.state()->callGetAnyPositionReward(1), 0u);
 	EXPECT_EQ(ctl.state()->callGetAnyPositionReward(0), 0u);
@@ -623,7 +628,7 @@ TEST(ContractPulse_Static, ComputePrizeSelectsBestReward)
 	EXPECT_EQ(ctl.state()->callComputePrize(winning, exact), 2000u * ctl.getTicketPrice().ticketPrice);
 
 	const Array<uint8, PULSE_PLAYER_DIGITS_ALIGNED> permuted = makePlayerDigits(5, 4, 3, 2, 1, 0);
-	EXPECT_EQ(ctl.state()->callComputePrize(winning, permuted), 150u * ctl.getTicketPrice().ticketPrice);
+	EXPECT_EQ(ctl.state()->callComputePrize(winning, permuted), 100u * ctl.getTicketPrice().ticketPrice);
 
 	const Array<uint8, PULSE_PLAYER_DIGITS_ALIGNED> none = makePlayerDigits(9, 9, 9, 9, 9, 9);
 	EXPECT_EQ(ctl.state()->callComputePrize(winning, none), 0u);
@@ -644,7 +649,6 @@ TEST(ContractPulse_Private, NextEpochDataClearResetsFlagsAndValues)
 	data.newDevPercent = 3;
 	data.newBurnPercent = 4;
 	data.newShareholdersPercent = 5;
-	data.newQHeartPercent = 6;
 	data.newQHeartHoldLimit = 7;
 
 	data.clear();
@@ -659,7 +663,6 @@ TEST(ContractPulse_Private, NextEpochDataClearResetsFlagsAndValues)
 	EXPECT_EQ(data.newDevPercent, 0u);
 	EXPECT_EQ(data.newBurnPercent, 0u);
 	EXPECT_EQ(data.newShareholdersPercent, 0u);
-	EXPECT_EQ(data.newQHeartPercent, 0u);
 	EXPECT_EQ(data.newQHeartHoldLimit, 0u);
 }
 
@@ -679,7 +682,6 @@ TEST(ContractPulse_Private, NextEpochDataApplyUpdatesState)
 	data.newDevPercent = 11;
 	data.newBurnPercent = 22;
 	data.newShareholdersPercent = 33;
-	data.newQHeartPercent = 4;
 	data.newQHeartHoldLimit = 999;
 
 	data.apply(*ctl.state());
@@ -689,7 +691,6 @@ TEST(ContractPulse_Private, NextEpochDataApplyUpdatesState)
 	EXPECT_EQ(ctl.state()->getDevPercentInternal(), 11u);
 	EXPECT_EQ(ctl.state()->getBurnPercentInternal(), 22u);
 	EXPECT_EQ(ctl.state()->getShareholdersPercentInternal(), 33u);
-	EXPECT_EQ(ctl.state()->getQHeartPercentInternal(), 4u);
 	EXPECT_EQ(ctl.state()->getQHeartHoldLimitInternal(), 999u);
 }
 
@@ -900,7 +901,6 @@ TEST(ContractPulse_Public, GettersReturnDefaultsAfterInitialize)
 	EXPECT_EQ(fees.burnPercent, PULSE_DEFAULT_BURN_PERCENT);
 	EXPECT_EQ(fees.shareholdersPercent, PULSE_DEFAULT_SHAREHOLDERS_PERCENT);
 	EXPECT_EQ(fees.rlShareholdersPercent, PULSE_DEFAULT_RL_SHAREHOLDERS_PERCENT);
-	EXPECT_EQ(fees.qheartPercent, PULSE_DEFAULT_QHEART_PERCENT);
 	EXPECT_EQ(fees.returnCode, static_cast<uint8>(PULSE::EReturnCode::SUCCESS));
 
 	const PULSE::GetWinningDigits_output& win = ctl.getWinningDigits();
@@ -958,22 +958,20 @@ TEST(ContractPulse_Public, SetDrawHourValidatesAndAppliesOnEndEpoch)
 TEST(ContractPulse_Public, SetFeesValidatesAndAppliesOnEndEpoch)
 {
 	ContractTestingPulse ctl;
-	EXPECT_EQ(ctl.setFees(id::randomValue(), 1, 2, 3, 4, 5).returnCode, static_cast<uint8>(PULSE::EReturnCode::ACCESS_DENIED));
-	EXPECT_EQ(ctl.setFees(ctl.state()->getQHeartIssuer(), 60, 60, 0, 0, 0).returnCode, static_cast<uint8>(PULSE::EReturnCode::INVALID_VALUE));
+	EXPECT_EQ(ctl.setFees(id::randomValue(), 1, 2, 3, 4).returnCode, static_cast<uint8>(PULSE::EReturnCode::ACCESS_DENIED));
+	EXPECT_EQ(ctl.setFees(ctl.state()->getQHeartIssuer(), 60, 60, 0, 0).returnCode, static_cast<uint8>(PULSE::EReturnCode::INVALID_VALUE));
 
-	EXPECT_EQ(ctl.setFees(ctl.state()->getQHeartIssuer(), 11, 22, 33, 6, 4).returnCode, static_cast<uint8>(PULSE::EReturnCode::SUCCESS));
+	EXPECT_EQ(ctl.setFees(ctl.state()->getQHeartIssuer(), 11, 22, 33, 6).returnCode, static_cast<uint8>(PULSE::EReturnCode::SUCCESS));
 	EXPECT_EQ(ctl.state()->getDevPercentInternal(), PULSE_DEFAULT_DEV_PERCENT);
 	EXPECT_EQ(ctl.state()->getBurnPercentInternal(), PULSE_DEFAULT_BURN_PERCENT);
 	EXPECT_EQ(ctl.state()->getShareholdersPercentInternal(), PULSE_DEFAULT_SHAREHOLDERS_PERCENT);
 	EXPECT_EQ(ctl.state()->getRLShareholdersPercentInternal(), PULSE_DEFAULT_RL_SHAREHOLDERS_PERCENT);
-	EXPECT_EQ(ctl.state()->getQHeartPercentInternal(), PULSE_DEFAULT_QHEART_PERCENT);
 
 	ctl.endEpoch();
 	EXPECT_EQ(ctl.state()->getDevPercentInternal(), 11u);
 	EXPECT_EQ(ctl.state()->getBurnPercentInternal(), 22u);
 	EXPECT_EQ(ctl.state()->getShareholdersPercentInternal(), 33u);
 	EXPECT_EQ(ctl.state()->getRLShareholdersPercentInternal(), 6u);
-	EXPECT_EQ(ctl.state()->getQHeartPercentInternal(), 4u);
 }
 
 // Ensure hold-limit changes do not affect the current round.
@@ -995,7 +993,7 @@ TEST(ContractPulse_Public, GettersReflectAppliedChanges)
 	EXPECT_EQ(ctl.setPrice(ctl.state()->getQHeartIssuer(), 555).returnCode, static_cast<uint8>(PULSE::EReturnCode::SUCCESS));
 	EXPECT_EQ(ctl.setSchedule(ctl.state()->getQHeartIssuer(), 0x7F).returnCode, static_cast<uint8>(PULSE::EReturnCode::SUCCESS));
 	EXPECT_EQ(ctl.setDrawHour(ctl.state()->getQHeartIssuer(), 9).returnCode, static_cast<uint8>(PULSE::EReturnCode::SUCCESS));
-	EXPECT_EQ(ctl.setFees(ctl.state()->getQHeartIssuer(), 11, 22, 33, 6, 4).returnCode, static_cast<uint8>(PULSE::EReturnCode::SUCCESS));
+	EXPECT_EQ(ctl.setFees(ctl.state()->getQHeartIssuer(), 11, 22, 33, 6).returnCode, static_cast<uint8>(PULSE::EReturnCode::SUCCESS));
 	EXPECT_EQ(ctl.setQHeartHoldLimit(ctl.state()->getQHeartIssuer(), 4321).returnCode, static_cast<uint8>(PULSE::EReturnCode::SUCCESS));
 
 	ctl.endEpoch();
@@ -1011,7 +1009,6 @@ TEST(ContractPulse_Public, GettersReflectAppliedChanges)
 	EXPECT_EQ(fees.burnPercent, 22u);
 	EXPECT_EQ(fees.shareholdersPercent, 33u);
 	EXPECT_EQ(fees.rlShareholdersPercent, 6u);
-	EXPECT_EQ(fees.qheartPercent, 4u);
 }
 
 // Prevent ticket purchases outside the selling window.
@@ -1669,7 +1666,7 @@ TEST(ContractPulse_Public, GetWinnersReportsPaidTickets)
 	ctl.issuePulseSharesTo(id::randomValue(), NUMBER_OF_COMPUTORS);
 	const ContractTestingPulse::QHeartIssuance& issuance = ctl.issueQHeart(1000000);
 
-	EXPECT_EQ(ctl.setFees(ctl.state()->getQHeartIssuer(), 0, 0, 0, 0, 0).returnCode, static_cast<uint8>(PULSE::EReturnCode::SUCCESS));
+	EXPECT_EQ(ctl.setFees(ctl.state()->getQHeartIssuer(), 0, 0, 0, 0).returnCode, static_cast<uint8>(PULSE::EReturnCode::SUCCESS));
 	EXPECT_EQ(ctl.setPrice(ctl.state()->getQHeartIssuer(), 1).returnCode, static_cast<uint8>(PULSE::EReturnCode::SUCCESS));
 	ctl.endEpoch();
 
@@ -1938,7 +1935,7 @@ TEST(ContractPulse_Gameplay, ProRataPayoutWhenBalanceInsufficient)
 	ContractTestingPulse ctl;
 	const ContractTestingPulse::QHeartIssuance& issuance = ctl.issueQHeart(2000000);
 
-	EXPECT_EQ(ctl.setFees(ctl.state()->getQHeartIssuer(), 0, 0, 0, 0, 0).returnCode, static_cast<uint8>(PULSE::EReturnCode::SUCCESS));
+	EXPECT_EQ(ctl.setFees(ctl.state()->getQHeartIssuer(), 0, 0, 0, 0).returnCode, static_cast<uint8>(PULSE::EReturnCode::SUCCESS));
 	EXPECT_EQ(ctl.setPrice(ctl.state()->getQHeartIssuer(), 1).returnCode, static_cast<uint8>(PULSE::EReturnCode::SUCCESS));
 	ctl.endEpoch();
 
@@ -1985,8 +1982,8 @@ TEST(ContractPulse_Gameplay, ProRataPayoutWhenBalanceInsufficient)
 	EXPECT_EQ(ctl.qheartBalanceOf(ctl.pulseSelf()), contractBefore - (expectedA + expectedB));
 }
 
-// Validate fee distribution to dev, shareholders, and QHeart wallet.
-TEST(ContractPulse_Gameplay, FeesDistributedToDevShareholdersAndQHeartWallet)
+// Validate fee distribution to dev and shareholders.
+TEST(ContractPulse_Gameplay, FeesDistributedToDevAndShareholders)
 {
 	ContractTestingPulse ctl;
 	const id shareholder = id::randomValue();
@@ -1996,10 +1993,9 @@ TEST(ContractPulse_Gameplay, FeesDistributedToDevShareholdersAndQHeartWallet)
 	static constexpr uint8 devPercent = 10;
 	static constexpr uint8 burnPercent = 0;
 	static constexpr uint8 shareholdersPercent = 10;
-	static constexpr uint8 qheartPercent = 10;
 	const uint64 ticketPrice = static_cast<uint64>(NUMBER_OF_COMPUTORS) * 10;
 
-	EXPECT_EQ(ctl.setFees(ctl.state()->getQHeartIssuer(), devPercent, burnPercent, shareholdersPercent, 0, qheartPercent).returnCode,
+	EXPECT_EQ(ctl.setFees(ctl.state()->getQHeartIssuer(), devPercent, burnPercent, shareholdersPercent, 0).returnCode,
 	          static_cast<uint8>(PULSE::EReturnCode::SUCCESS));
 	EXPECT_EQ(ctl.setPrice(ctl.state()->getQHeartIssuer(), ticketPrice).returnCode, static_cast<uint8>(PULSE::EReturnCode::SUCCESS));
 	ctl.endEpoch();
@@ -2017,7 +2013,6 @@ TEST(ContractPulse_Gameplay, FeesDistributedToDevShareholdersAndQHeartWallet)
 
 	const uint64 devBefore = ctl.qheartBalanceOf(devWallet);
 	const uint64 shareholderBefore = ctl.qheartBalanceOf(shareholder);
-	const uint64 qheartWalletBefore = ctl.qheartBalanceOf(ctl.state()->getQHeartIssuer());
 
 	ctl.setDateTime(2025, 1, 10, 12);
 	ctl.forceBeginTick();
@@ -2025,14 +2020,12 @@ TEST(ContractPulse_Gameplay, FeesDistributedToDevShareholdersAndQHeartWallet)
 	const uint64 roundRevenue = ticketPrice;
 	const uint64 expectedDev = (roundRevenue * devPercent) / 100;
 	const uint64 expectedShareholders = (roundRevenue * shareholdersPercent) / 100;
-	const uint64 expectedQHeart = (roundRevenue * qheartPercent) / 100;
 	const uint64 dividendPerShare = expectedShareholders / NUMBER_OF_COMPUTORS;
 	const uint64 expectedShareholderGain = dividendPerShare * NUMBER_OF_COMPUTORS;
 
 	EXPECT_EQ(expectedShareholderGain, expectedShareholders);
 	EXPECT_EQ(ctl.qheartBalanceOf(devWallet), devBefore + expectedDev);
 	EXPECT_EQ(ctl.qheartBalanceOf(shareholder), shareholderBefore + expectedShareholderGain);
-	EXPECT_EQ(ctl.qheartBalanceOf(ctl.state()->getQHeartIssuer()), qheartWalletBefore + expectedQHeart);
 }
 
 // Validate fee distribution to Random Lottery shareholders.
@@ -2047,10 +2040,9 @@ TEST(ContractPulse_Gameplay, FeesDistributedToRLShareholders)
 	static constexpr uint8 burnPercent = 0;
 	static constexpr uint8 shareholdersPercent = 0;
 	static constexpr uint8 rlShareholdersPercent = 10;
-	static constexpr uint8 qheartPercent = 0;
 	constexpr uint64 ticketPrice = static_cast<uint64>(NUMBER_OF_COMPUTORS) * 10ULL;
 
-	EXPECT_EQ(ctl.setFees(ctl.state()->getQHeartIssuer(), devPercent, burnPercent, shareholdersPercent, rlShareholdersPercent, qheartPercent).returnCode,
+	EXPECT_EQ(ctl.setFees(ctl.state()->getQHeartIssuer(), devPercent, burnPercent, shareholdersPercent, rlShareholdersPercent).returnCode,
 	          static_cast<uint8>(PULSE::EReturnCode::SUCCESS));
 	EXPECT_EQ(ctl.setPrice(ctl.state()->getQHeartIssuer(), ticketPrice).returnCode, static_cast<uint8>(PULSE::EReturnCode::SUCCESS));
 	ctl.endEpoch();
@@ -2114,19 +2106,18 @@ TEST(ContractPulse_Gameplay, QHeartHoldLimitExcessTransferred)
 	const uint64 burnAmount = (roundRevenue * fees.burnPercent) / 100;
 	const uint64 shareholdersAmount = (roundRevenue * fees.shareholdersPercent) / 100;
 	const uint64 rlShareholdersAmount = (roundRevenue * fees.rlShareholdersPercent) / 100;
-	const uint64 qheartAmount = (roundRevenue * fees.qheartPercent) / 100;
 	const uint64 dividendPerShare = shareholdersAmount / NUMBER_OF_COMPUTORS;
 	const uint64 shareholdersPaid = dividendPerShare * NUMBER_OF_COMPUTORS;
 	const uint64 rlDividendPerShare = rlShareholdersAmount / NUMBER_OF_COMPUTORS;
 	const uint64 rlShareholdersPaid = rlDividendPerShare * NUMBER_OF_COMPUTORS;
-	const uint64 feesTotal = devAmount + burnAmount + shareholdersPaid + rlShareholdersPaid + qheartAmount;
+	const uint64 feesTotal = devAmount + burnAmount + shareholdersPaid + rlShareholdersPaid;
 
 	const uint64 balanceAfterFees = contractBefore - feesTotal;
 	ASSERT_GE(balanceAfterFees, prize);
 	const uint64 balanceAfterPrizes = balanceAfterFees - prize;
 	const uint64 excess = (balanceAfterPrizes > holdLimit) ? (balanceAfterPrizes - holdLimit) : 0;
 	const uint64 expectedContractAfter = balanceAfterPrizes - excess;
-	const uint64 expectedWalletAfter = walletBefore + qheartAmount + excess;
+	const uint64 expectedWalletAfter = walletBefore + excess;
 
 	ctl.setDateTime(2025, 1, 10, 12);
 	ctl.forceBeginTick();
