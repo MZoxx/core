@@ -258,6 +258,16 @@
 #define CONTRACT_STATE2_TYPE PULSE2
 #include "contracts/Pulse.h"
 
+#undef CONTRACT_INDEX
+#undef CONTRACT_STATE_TYPE
+#undef CONTRACT_STATE2_TYPE
+
+#define QRACEL_CONTRACT_INDEX 25
+#define CONTRACT_INDEX QRACEL_CONTRACT_INDEX
+#define CONTRACT_STATE_TYPE QRACEL
+#define CONTRACT_STATE2_TYPE QRACEL2
+#include "contracts/qRacel.h"
+
 // new contracts should be added above this line
 
 #ifdef INCLUDE_CONTRACT_TEST_EXAMPLES
@@ -368,6 +378,7 @@ constexpr struct ContractDescription
 	{"QTF", 199, 10000, sizeof(QTF::StateData)}, // proposal in epoch 197, IPO in 198, construction and first use in 199
     {"QDUEL", 199, 10000, sizeof(QDUEL::StateData)}, // proposal in epoch 197, IPO in 198, construction and first use in 199
 	{"PULSE", 204, 10000, sizeof(PULSE::StateData)}, // proposal in epoch 202, IPO in 203, construction and first use in 204
+    {"QRACEL", 174, 10000, sizeof(QRACEL::StateData)}, // testnet start epoch is 174
     // new contracts should be added above this line
 #ifdef INCLUDE_CONTRACT_TEST_EXAMPLES
     {"TESTEXA", 138, 10000, sizeof(TESTEXA::StateData)},
@@ -488,6 +499,7 @@ static void initializeContracts()
     REGISTER_CONTRACT_FUNCTIONS_AND_PROCEDURES(QTF);
     REGISTER_CONTRACT_FUNCTIONS_AND_PROCEDURES(QDUEL);
 	REGISTER_CONTRACT_FUNCTIONS_AND_PROCEDURES(PULSE);
+	REGISTER_CONTRACT_FUNCTIONS_AND_PROCEDURES(QRACEL);
     // new contracts should be added above this line
 #ifdef INCLUDE_CONTRACT_TEST_EXAMPLES
     REGISTER_CONTRACT_FUNCTIONS_AND_PROCEDURES(TESTEXA);
