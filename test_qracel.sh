@@ -165,12 +165,18 @@ validate_qracel_response() {
 
 looks_like_qracel_config() {
     local output="$1"
+    local min_bet
 
     if echo "$output" | grep -q 'Unexpected command!\|Received incomplete data\|Failed to query qRacel'; then
         return 1
     fi
 
-    echo "$output" | grep -q 'Next round id:'
+    if ! echo "$output" | grep -q 'Next round id:'; then
+        return 1
+    fi
+
+    min_bet=$(parse_value "Min bet" "$output")
+    [[ "$min_bet" == "1000000" ]]
 }
 
 autodetect_contract_index() {
@@ -244,6 +250,11 @@ get_config_output() {
     local output
     output=$(cli_call -qracelgetconfig "$CONTRACT_INDEX")
     validate_qracel_response "Config lesen" "$output"
+
+    if ! looks_like_qracel_config "$output"; then
+        fail "Config lesen schlug fehl: Antwort sieht nicht wie echte qRacel-Config aus. Wahrscheinlich zeigt CONTRACT_INDEX=${CONTRACT_INDEX} auf einen anderen Contract"
+    fi
+
     echo "$output"
 }
 
