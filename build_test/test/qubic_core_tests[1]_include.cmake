@@ -1,0 +1,5 @@
+if(EXISTS "/private/tmp/qracel-testnet-reg/build_test/test/qubic_core_tests[1]_tests.cmake")
+  include("/private/tmp/qracel-testnet-reg/build_test/test/qubic_core_tests[1]_tests.cmake")
+else()
+  add_test(qubic_core_tests_NOT_BUILT qubic_core_tests_NOT_BUILT)
+endif()

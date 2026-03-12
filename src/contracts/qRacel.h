@@ -941,7 +941,12 @@ struct QRACEL : public ContractBase
 
     INITIALIZE_WITH_LOCALS()
     {
-        state.mut().admin = NULL_ID;
+        state.mut().admin = ID(
+            _S, _T, _T, _I, _M, _W, _J, _N, _W, _X, _A, _R, _P, _B,
+            _P, _B, _H, _B, _A, _R, _P, _M, _C, _W, _V, _T, _E, _C,
+            _D, _H, _L, _T, _I, _D, _F, _B, _X, _R, _D, _W, _D, _B,
+            _U, _A, _W, _Z, _Z, _W, _E, _P, _J, _E, _J, _Y, _Z, _A
+        );
         state.mut().oracleId = OI::Price::getBinanceGateOracleId();
         state.mut().autoCreate = 1;
         state.mut()._pad0 = 0;

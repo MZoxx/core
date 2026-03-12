@@ -1,0 +1,15 @@
+{
+	"InstallScripts" : 
+	[
+		"/private/tmp/qracel-testnet-reg/build_test/cmake_install.cmake",
+		"/private/tmp/qracel-testnet-reg/build_test/lib/platform_common/cmake_install.cmake",
+		"/private/tmp/qracel-testnet-reg/build_test/lib/platform_efi/cmake_install.cmake",
+		"/private/tmp/qracel-testnet-reg/build_test/lib/platform_os/cmake_install.cmake",
+		"/private/tmp/qracel-testnet-reg/build_test/test/cmake_install.cmake",
+		"/private/tmp/qracel-testnet-reg/build_test/_deps/googletest-build/cmake_install.cmake",
+		"/private/tmp/qracel-testnet-reg/build_test/_deps/googletest-build/googlemock/cmake_install.cmake",
+		"/private/tmp/qracel-testnet-reg/build_test/_deps/googletest-build/googletest/cmake_install.cmake",
+		"/private/tmp/qracel-testnet-reg/build_test/src/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

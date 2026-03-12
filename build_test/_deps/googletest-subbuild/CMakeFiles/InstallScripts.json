@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/private/tmp/qracel-testnet-reg/build_test/_deps/googletest-subbuild/cmake_install.cmake"
+	],
+	"Parallel" : false
+}
