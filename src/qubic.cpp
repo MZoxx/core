@@ -1,5 +1,7 @@
 #define SINGLE_COMPILE_UNIT
 #define OLD_QVAULT
+#define NO_QIP
+#define NO_QRAFFLE
 
 //#define INCLUDE_CONTRACT_TEST_EXAMPLES
 
