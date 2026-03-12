@@ -90,7 +90,7 @@ Nutzung:
 Wichtige ENV-Variablen:
   NODE_IP=127.0.0.1
   NODE_PORT=31841
-    CONTRACT_INDEX=18|15|25
+    CONTRACT_INDEX=25|18|15
   ADMIN_SEED=<seed>
   BETTER_SEED=<seed>
   DURATION=10m|60m|6h|24h
@@ -103,10 +103,10 @@ Wichtige ENV-Variablen:
 
 Beispiele:
   ./test_qracel.sh --smoke
-    CONTRACT_INDEX=18 ./test_qracel.sh --create
-    CONTRACT_INDEX=18 ROUND_ID=1 ./test_qracel.sh --bet
-    CONTRACT_INDEX=18 BET_ID=0 ./test_qracel.sh --claim
-    CONTRACT_INDEX=18 DURATION=10m SIDE=up ./test_qracel.sh --full
+    CONTRACT_INDEX=25 ./test_qracel.sh --create
+    CONTRACT_INDEX=25 ROUND_ID=1 ./test_qracel.sh --bet
+    CONTRACT_INDEX=25 BET_ID=0 ./test_qracel.sh --claim
+    CONTRACT_INDEX=25 DURATION=10m SIDE=up ./test_qracel.sh --full
 EOF
 }
 
@@ -184,7 +184,7 @@ autodetect_contract_index() {
         return 0
     fi
 
-    local candidates=(18 15 25)
+    local candidates=(25 18 15)
     local idx
     local output
 
@@ -197,7 +197,7 @@ autodetect_contract_index() {
         fi
     done
 
-    fail "qRacel Contract-Index konnte nicht automatisch erkannt werden (getestet: 18, 15, 25). Ist qRacel auf dem Node schon registriert und deployed?"
+    fail "qRacel Contract-Index konnte nicht automatisch erkannt werden (getestet: 25, 18, 15). Ist qRacel auf dem Node schon registriert und deployed?"
 }
 
 cli_call() {

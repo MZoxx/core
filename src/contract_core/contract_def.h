@@ -112,11 +112,7 @@
 #define CONTRACT_INDEX QVAULT_CONTRACT_INDEX
 #define CONTRACT_STATE_TYPE QVAULT
 #define CONTRACT_STATE2_TYPE QVAULT2
-#ifdef OLD_QVAULT
-#include "contracts/QVAULT_old.h"
-#else
 #include "contracts/QVAULT.h"
-#endif
 
 #undef CONTRACT_INDEX
 #undef CONTRACT_STATE_TYPE
@@ -192,7 +188,77 @@
 #undef CONTRACT_STATE_TYPE
 #undef CONTRACT_STATE2_TYPE
 
-#define QRACEL_CONTRACT_INDEX 18
+#define QIP_CONTRACT_INDEX 18
+#define CONTRACT_INDEX QIP_CONTRACT_INDEX
+#define CONTRACT_STATE_TYPE QIP
+#define CONTRACT_STATE2_TYPE QIP2
+#include "contracts/QIP.h"
+
+#undef CONTRACT_INDEX
+#undef CONTRACT_STATE_TYPE
+#undef CONTRACT_STATE2_TYPE
+
+#define QRAFFLE_CONTRACT_INDEX 19
+#define CONTRACT_INDEX QRAFFLE_CONTRACT_INDEX
+#define CONTRACT_STATE_TYPE QRAFFLE
+#define CONTRACT_STATE2_TYPE QRAFFLE2
+#include "contracts/QRaffle.h"
+
+#undef CONTRACT_INDEX
+#undef CONTRACT_STATE_TYPE
+#undef CONTRACT_STATE2_TYPE
+
+#define QRWA_CONTRACT_INDEX 20
+#define CONTRACT_INDEX QRWA_CONTRACT_INDEX
+#define CONTRACT_STATE_TYPE QRWA
+#define CONTRACT_STATE2_TYPE QRWA2
+#include "contracts/qRWA.h"
+
+#undef CONTRACT_INDEX
+#undef CONTRACT_STATE_TYPE
+#undef CONTRACT_STATE2_TYPE
+
+#define QRP_CONTRACT_INDEX 21
+#define CONTRACT_INDEX QRP_CONTRACT_INDEX
+#define CONTRACT_STATE_TYPE QRP
+#define CONTRACT_STATE2_TYPE QRP2
+#include "contracts/QReservePool.h"
+
+#undef CONTRACT_INDEX
+#undef CONTRACT_STATE_TYPE
+#undef CONTRACT_STATE2_TYPE
+
+#define QTF_CONTRACT_INDEX 22
+#define CONTRACT_INDEX QTF_CONTRACT_INDEX
+#define CONTRACT_STATE_TYPE QTF
+#define CONTRACT_STATE2_TYPE QTF2
+#include "contracts/QThirtyFour.h"
+
+#undef CONTRACT_INDEX
+#undef CONTRACT_STATE_TYPE
+#undef CONTRACT_STATE2_TYPE
+
+#define QDUEL_CONTRACT_INDEX 23
+#define CONTRACT_INDEX QDUEL_CONTRACT_INDEX
+#define CONTRACT_STATE_TYPE QDUEL
+#define CONTRACT_STATE2_TYPE QDUEL2
+#include "contracts/QDuel.h"
+
+#undef CONTRACT_INDEX
+#undef CONTRACT_STATE_TYPE
+#undef CONTRACT_STATE2_TYPE
+
+#define PULSE_CONTRACT_INDEX 24
+#define CONTRACT_INDEX PULSE_CONTRACT_INDEX
+#define CONTRACT_STATE_TYPE PULSE
+#define CONTRACT_STATE2_TYPE PULSE2
+#include "contracts/Pulse.h"
+
+#undef CONTRACT_INDEX
+#undef CONTRACT_STATE_TYPE
+#undef CONTRACT_STATE2_TYPE
+
+#define QRACEL_CONTRACT_INDEX 25
 #define CONTRACT_INDEX QRACEL_CONTRACT_INDEX
 #define CONTRACT_STATE_TYPE QRACEL
 #define CONTRACT_STATE2_TYPE QRACEL2
@@ -301,7 +367,14 @@ constexpr struct ContractDescription
     {"QDRAW", 179, 10000, sizeof(QDRAW::StateData)}, // proposal in epoch 177, IPO in 178, construction and first use in 179
     {"RL", 182, 10000, sizeof(RL::StateData)}, // proposal in epoch 180, IPO in 181, construction and first use in 182
     {"QBOND", 182, 10000, sizeof(QBOND::StateData)}, // proposal in epoch 180, IPO in 181, construction and first use in 182
-    {"QRACEL", 204, 10000, sizeof(QRACEL::StateData)}, // testnet start epoch is 204
+    {"QIP", 189, 10000, sizeof(QIP::StateData)}, // proposal in epoch 187, IPO in 188, construction and first use in 189
+    {"QRAFFLE", 192, 10000, sizeof(QRAFFLE::StateData)}, // proposal in epoch 190, IPO in 191, construction and first use in 192
+    {"QRWA", 197, 10000, sizeof(QRWA::StateData)}, // proposal in epoch 195, IPO in 196, construction and first use in 197
+	{"QRP", 199, 10000, sizeof(IPO)}, // proposal in epoch 197, IPO in 198, construction and first use in 199
+	{"QTF", 199, 10000, sizeof(QTF::StateData)}, // proposal in epoch 197, IPO in 198, construction and first use in 199
+    {"QDUEL", 199, 10000, sizeof(QDUEL::StateData)}, // proposal in epoch 197, IPO in 198, construction and first use in 199
+	{"PULSE", 204, 10000, sizeof(PULSE::StateData)}, // proposal in epoch 202, IPO in 203, construction and first use in 204
+    {"QRACEL", 204, 10000, sizeof(QRACEL::StateData)}, // proposal in epoch 202, IPO in 203, construction and first use in 204
     // new contracts should be added above this line
 #ifdef INCLUDE_CONTRACT_TEST_EXAMPLES
     {"TESTEXA", 138, 10000, sizeof(TESTEXA::StateData)},
@@ -415,6 +488,13 @@ static void initializeContracts()
     REGISTER_CONTRACT_FUNCTIONS_AND_PROCEDURES(QDRAW);
     REGISTER_CONTRACT_FUNCTIONS_AND_PROCEDURES(RL);
     REGISTER_CONTRACT_FUNCTIONS_AND_PROCEDURES(QBOND);
+    REGISTER_CONTRACT_FUNCTIONS_AND_PROCEDURES(QIP);
+    REGISTER_CONTRACT_FUNCTIONS_AND_PROCEDURES(QRAFFLE);
+    REGISTER_CONTRACT_FUNCTIONS_AND_PROCEDURES(QRWA);
+    REGISTER_CONTRACT_FUNCTIONS_AND_PROCEDURES(QRP);
+    REGISTER_CONTRACT_FUNCTIONS_AND_PROCEDURES(QTF);
+    REGISTER_CONTRACT_FUNCTIONS_AND_PROCEDURES(QDUEL);
+	REGISTER_CONTRACT_FUNCTIONS_AND_PROCEDURES(PULSE);
 	REGISTER_CONTRACT_FUNCTIONS_AND_PROCEDURES(QRACEL);
     // new contracts should be added above this line
 #ifdef INCLUDE_CONTRACT_TEST_EXAMPLES
