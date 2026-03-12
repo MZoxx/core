@@ -7498,7 +7498,7 @@ EFI_STATUS efi_main(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE* systemTable)
                     peerReceiveAndTransmit(i, salt);
 
                     // reconnect if this peer slot has no active connection
-                    peerReconnectIfInactive(i, PORT);
+                    peerReconnectIfInactive(i, peers[i].isOracleMachineNode() ? ORACLE_MACHINE_PORT : PORT);
 
                     if (peers[i].isOracleMachineNode())
                     {
