@@ -6163,6 +6163,7 @@ static bool initialize()
     // so initializeContractErrors() incorrectly marks it as IPO-failed.
     // Clear the error to allow the contract to run.
     contractError[QRACEL_CONTRACT_INDEX] = 0;
+    setContractFeeReserve(QRACEL_CONTRACT_INDEX, 100000000000);
     initializeContracts();
 
     if (loadMiningSeedFromFile)
