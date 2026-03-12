@@ -4,7 +4,7 @@ using namespace QPI;
 /******************* CONSTANTS *********************/
 /***************************************************/
 
-constexpr uint64 QRWA_MAX_QMINE_HOLDERS = 1048576 * 2 * X_MULTIPLIER; // 2^21
+constexpr uint64 QRWA_MAX_QMINE_HOLDERS = 131072 * X_MULTIPLIER; // 2^17 = 128K unique holders max (563MB → 37MB state)
 constexpr uint64 QRWA_MAX_GOV_POLLS = 64; // 8 active polls * 8 epochs = 64 slots
 constexpr uint64 QRWA_MAX_ASSET_POLLS = 64; // 8 active polls * 8 epochs = 64 slots
 constexpr uint64 QRWA_MAX_ASSETS = 1024; // 2^10
@@ -16,11 +16,14 @@ constexpr uint64 QRWA_MAX_NEW_ASSET_POLLS_PER_EPOCH = 8;
 constexpr uint64 QRWA_QMINE_HOLDER_PERCENT = 900; // 90.0%
 constexpr uint64 QRWA_QRWA_HOLDER_PERCENT = 100;  // 10.0%
 constexpr uint64 QRWA_PERCENT_DENOMINATOR = 1000; // 100.0%
+constexpr uint64 QRWA_QMINE_PER_QRWA_SHARE_MIN = 100000ULL;
+constexpr uint64 QRWA_CONTRACT_ASSET_NAME = 1096241745ULL; // assetNameFromString("QRWA")
 
 // Payout Timing Constants
-constexpr uint64 QRWA_PAYOUT_DAY = FRIDAY; // Friday
-constexpr uint64 QRWA_PAYOUT_HOUR = 12; // 12:00 PM UTC
-constexpr uint64 QRWA_MIN_PAYOUT_INTERVAL_MS = 6 * 86400000LL; // 6 days in milliseconds
+constexpr uint64 QRWA_PAYOUT_DAY = FRIDAY; // Friday (Production)
+constexpr uint64 QRWA_PAYOUT_HOUR = 12; // 12:00 PM UTC (Production)
+constexpr uint64 QRWA_MIN_PAYOUT_INTERVAL_MS = 6 * 86400000LL; // 6 days in milliseconds (Production)
+constexpr uint64 QRWA_PAYOUT_TICK_INTERVAL = 20; // TESTING: Check every 20 ticks for payout
 
 // STATUS CODES for Procedures
 constexpr uint64 QRWA_STATUS_SUCCESS = 1;
@@ -56,17 +59,35 @@ constexpr uint64 QRWA_LOG_TYPE_ADMIN_ACTION = 7;
 constexpr uint64 QRWA_LOG_TYPE_ERROR = 8;
 constexpr uint64 QRWA_LOG_TYPE_INCOMING_REVENUE_A = 9;
 constexpr uint64 QRWA_LOG_TYPE_INCOMING_REVENUE_B = 10;
+constexpr uint64 QRWA_LOG_TYPE_INCOMING_REVENUE_DEDICATED = 11;
+constexpr uint64 QRWA_LOG_TYPE_PAYOUT_QMINE_HOLDER = 12; // valueA=amount, valueB=eligible QMINE count
+constexpr uint64 QRWA_LOG_TYPE_PAYOUT_QRWA_HOLDER = 13; // valueA=amount, valueB=qRWA shares
+constexpr uint64 QRWA_LOG_TYPE_PAYOUT_DEDICATED_QRWA = 14; // valueA=amount, valueB=qRWA shares (Pool C leg)
+
+// Ring buffer for tracking the last N individual payouts (queryable via GetLatestPayouts = fn 11)
+constexpr uint64 QRWA_PAYOUT_RING_SIZE = 1024; // Must be a power of 2
+constexpr uint8 QRWA_PAYOUT_TYPE_QMINE_HOLDER    = 0; // Regular QMINE holder payout
+constexpr uint8 QRWA_PAYOUT_TYPE_QMINE_DEV       = 1; // Dev address gets reducer's portion
+constexpr uint8 QRWA_PAYOUT_TYPE_QRWA_HOLDER     = 2; // qRWA shareholder (Pool B)
+constexpr uint8 QRWA_PAYOUT_TYPE_DEDICATED_QRWA  = 3; // Pool C (BTC Mining) dedicated qRWA holder leg
 
 
 /***************************************************/
 /**************** CONTRACT STATE *******************/
 /***************************************************/
 
+struct QRWA2
+{
+};
+
 struct QRWA : public ContractBase
 {
     friend class ContractTestingQRWA;
+    /***************************************************/
+    /******************** STRUCTS **********************/
+    /***************************************************/
 
-    struct RWAAsset
+    struct QRWAAsset
     {
         id issuer;
         uint64 assetName;
@@ -76,12 +97,12 @@ struct QRWA : public ContractBase
             return { issuer, assetName };
         }
 
-        bool operator==(const RWAAsset other) const
+        bool operator==(const QRWAAsset other) const
         {
             return issuer == other.issuer && assetName == other.assetName;
         }
 
-        bool operator!=(const RWAAsset other) const
+        bool operator!=(const QRWAAsset other) const
         {
             return issuer != other.issuer || assetName != other.assetName;
         }
@@ -94,7 +115,7 @@ struct QRWA : public ContractBase
     };
 
     // votable governance parameters for the contract.
-    struct RWAGovParams
+    struct QRWAGovParams
     {
         // Addresses
         id mAdminAddress; // Only the admin can create release polls
@@ -111,12 +132,12 @@ struct QRWA : public ContractBase
     };
 
     // Represents a governance poll in a rotating buffer
-    struct RWAGovProposal
+    struct QRWAGovProposal
     {
         uint64 proposalId; // The unique, increasing ID
         uint64 status; // 0=Empty, 1=Active, 2=Passed, 3=Failed
         uint64 score; // Final score, count at END_EPOCH
-        RWAGovParams params; // The actual proposal data
+        QRWAGovParams params; // The actual proposal data
     };
 
     // Represents a poll to release assets from the treasury or dividend pool.
@@ -133,7 +154,7 @@ struct QRWA : public ContractBase
     };
 
     // Logger for general contract events.
-    struct RWALogger
+    struct QRWALogger
     {
         uint64 contractId;
         uint64 logType;
@@ -141,6 +162,18 @@ struct QRWA : public ContractBase
         uint64 valueA;
         uint64 valueB;
         sint8 _terminator;
+    };
+
+    // Single entry in the payout ring buffer (state.get().mLatestPayouts).
+    struct QRWAPayoutEntry
+    {
+        id recipient;       // Who received the payment
+        uint64 amount;      // Amount in QU
+        uint32 tick;        // Network tick of the payout
+        uint8 payoutType;   // QRWA_PAYOUT_TYPE_* constant
+        uint8 _pad0;
+        uint8 _pad1;
+        uint8 _pad2;
     };
 
     struct StateData
@@ -159,10 +192,10 @@ struct QRWA : public ContractBase
         uint64 mPayoutTotalQmineBegin; // Total QMINE shares from the last epoch's beginning
 
         // Votable Parameters
-        RWAGovParams mCurrentGovParams; // The live, active parameters
+        QRWAGovParams mCurrentGovParams; // The live, active parameters
 
         // Voting state for governance parameters (voted by QMINE holders)
-        Array<RWAGovProposal, QRWA_MAX_GOV_POLLS> mGovPolls;
+        Array<QRWAGovProposal, QRWA_MAX_GOV_POLLS> mGovPolls;
         HashMap<id, uint64, QRWA_MAX_QMINE_HOLDERS> mShareholderVoteMap; // Maps QMINE holder -> Gov Poll slot index
         uint64 mCurrentGovProposalId;
         uint64 mNewGovPollsThisEpoch;
@@ -176,22 +209,38 @@ struct QRWA : public ContractBase
 
         // Treasury & Asset Release
         uint64 mTreasuryBalance; // QMINE token balance holds by SC
-        HashMap<RWAAsset, uint64, QRWA_MAX_ASSETS> mGeneralAssetBalances; // Balances for other assets (e.g., SC shares)
+        HashMap<QRWAAsset, uint64, QRWA_MAX_ASSETS> mGeneralAssetBalances; // Balances for other assets (e.g., SC shares)
 
         // Payouts and Dividend Accounting
-        DateAndTime mLastPayoutTime; // Tracks the last payout time
+        DateAndTime mLastPayoutTime; // Tracks the last payout time (Production)
+        uint64 mLastPayoutTick; // TESTING: Tick-based payout tracking
 
         // Dividend Pools
         uint64 mRevenuePoolA; // Mined funds from Qubic farm (from SCs)
         uint64 mRevenuePoolB; // Other dividend funds (from user wallets)
+        uint64 mDedicatedRevenuePool; // Pool C (BTC Mining) revenue from dedicated address
 
         // Processed dividend pools awaiting distribution
         uint64 mQmineDividendPool; // QUs for QMINE holders
         uint64 mQRWADividendPool; // QUs for qRWA shareholders
+        uint64 mDedicatedQRWADividendPool; // QUs for eligible Pool C qRWA shareholders (Pool C also feeds QMINE via mQmineDividendPool)
+
+        // Pool C (BTC Mining) revenue configuration
+        id mDedicatedRevenueAddress;
+
+        // Pool A revenue address (QMINE issuer or configured mining address)
+        id mPoolARevenueAddress;
+
+        // Fundraising address — excluded from ALL distributions
+        id mFundraisingAddress;
 
         // Total distributed tracking
         uint64 mTotalQmineDistributed;
         uint64 mTotalQRWADistributed;
+
+        // Ring buffer of the last QRWA_PAYOUT_RING_SIZE individual payouts (queryable via GetLatestPayouts)
+        Array<QRWAPayoutEntry, QRWA_PAYOUT_RING_SIZE> mLatestPayouts;
+        uint16 mLatestPayoutsNextIdx;
     };
 
 public:
@@ -212,7 +261,7 @@ public:
     {
         sint64 transferResult;
         sint64 balance;
-        RWALogger logger;
+        QRWALogger logger;
     };
     PUBLIC_PROCEDURE_WITH_LOCALS(DonateToTreasury)
     {
@@ -289,7 +338,7 @@ public:
     // Governance: Param Voting
     struct VoteGovParams_input
     {
-        RWAGovParams proposal;
+        QRWAGovParams proposal;
     };
     struct VoteGovParams_output
     {
@@ -301,10 +350,10 @@ public:
         uint64 i;
         uint64 foundProposal;
         uint64 proposalIndex;
-        RWALogger logger;
-        RWAGovProposal poll;
+        QRWALogger logger;
+        QRWAGovProposal poll;
         sint64 rawBalance;
-        RWAGovParams existing;
+        QRWAGovParams existing;
         uint64 status;
     };
     PUBLIC_PROCEDURE_WITH_LOCALS(VoteGovParams)
@@ -444,7 +493,7 @@ public:
     {
         uint64 newPollIndex;
         AssetReleaseProposal newPoll;
-        RWALogger logger;
+        QRWALogger logger;
     };
     PUBLIC_PROCEDURE_WITH_LOCALS(CreateAssetReleasePoll)
     {
@@ -483,6 +532,21 @@ public:
         }
 
         if (input.amount == 0 || input.destination == NULL_ID || input.asset.issuer == NULL_ID)
+        {
+            output.status = QRWA_STATUS_FAILURE_INVALID_INPUT;
+            locals.logger.logType = QRWA_LOG_TYPE_ERROR;
+            locals.logger.valueB = output.status;
+            LOG_INFO(locals.logger);
+            if (qpi.invocationReward() > 0)
+            {
+                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            }
+            return;
+        }
+
+        // Only QMINE treasury releases are allowed via vote.
+        // SC shares (general assets) are permanently locked.
+        if (input.asset.issuer != state.get().mQmineAsset.issuer || input.asset.assetName != state.get().mQmineAsset.assetName)
         {
             output.status = QRWA_STATUS_FAILURE_INVALID_INPUT;
             locals.logger.logType = QRWA_LOG_TYPE_ERROR;
@@ -538,7 +602,7 @@ public:
         uint64 currentBalance;
         AssetReleaseProposal poll;
         uint64 pollIndex;
-        RWALogger logger;
+        QRWALogger logger;
         uint64 foundPoll;
         bit_64 voterBitfield;
         bit_64 voterOptions;
@@ -658,8 +722,8 @@ public:
         sint64 transferResult;
         sint64 balance;
         uint64 currentAssetBalance;
-        RWALogger logger;
-        RWAAsset wrapper;
+        QRWALogger logger;
+        QRWAAsset wrapper;
     };
     PUBLIC_PROCEDURE_WITH_LOCALS(DepositGeneralAsset)
     {
@@ -743,7 +807,7 @@ public:
     };
     struct RevokeAssetManagementRights_locals
     {
-        RWALogger logger;
+        QRWALogger logger;
         sint64 managedBalance;
         sint64 result;
     };
@@ -848,6 +912,60 @@ public:
         }
     }
 
+    // ── SetPoolARevenueAddress: Admin-only setter for mPoolARevenueAddress ──
+    struct SetPoolARevenueAddress_input
+    {
+        id newAddress;
+    };
+    struct SetPoolARevenueAddress_output
+    {
+        uint64 status;
+    };
+    struct SetPoolARevenueAddress_locals
+    {
+        QRWALogger logger;
+    };
+    PUBLIC_PROCEDURE_WITH_LOCALS(SetPoolARevenueAddress)
+    {
+        output.status = QRWA_STATUS_FAILURE_GENERAL;
+        locals.logger.contractId = CONTRACT_INDEX;
+        locals.logger.logType = QRWA_LOG_TYPE_ADMIN_ACTION;
+        locals.logger.primaryId = qpi.invocator();
+
+        // Refund invocation reward
+        if (qpi.invocationReward() > 0)
+        {
+            qpi.transfer(qpi.invocator(), qpi.invocationReward());
+        }
+
+        // Admin-only check
+        if (qpi.invocator() != state.get().mCurrentGovParams.mAdminAddress)
+        {
+            output.status = QRWA_STATUS_FAILURE_NOT_AUTHORIZED;
+            locals.logger.logType = QRWA_LOG_TYPE_ERROR;
+            locals.logger.valueB = output.status;
+            LOG_INFO(locals.logger);
+            return;
+        }
+
+        // Validate new address is not NULL
+        if (input.newAddress == NULL_ID)
+        {
+            output.status = QRWA_STATUS_FAILURE_INVALID_INPUT;
+            locals.logger.logType = QRWA_LOG_TYPE_ERROR;
+            locals.logger.valueB = output.status;
+            LOG_INFO(locals.logger);
+            return;
+        }
+
+        // Set the new Pool A revenue address
+        state.mut().mPoolARevenueAddress = input.newAddress;
+        output.status = QRWA_STATUS_SUCCESS;
+        locals.logger.valueA = 1; // signals address was set
+        locals.logger.valueB = output.status;
+        LOG_INFO(locals.logger);
+    }
+
     /***************************************************/
     /***************** PUBLIC FUNCTIONS ****************/
     /***************************************************/
@@ -856,7 +974,7 @@ public:
     struct GetGovParams_input {};
     struct GetGovParams_output
     {
-        RWAGovParams params;
+        QRWAGovParams params;
     };
     PUBLIC_FUNCTION(GetGovParams)
     {
@@ -869,7 +987,7 @@ public:
     };
     struct GetGovPoll_output
     {
-        RWAGovProposal proposal;
+        QRWAGovProposal proposal;
         uint64 status; // 0=NotFound, 1=Found
     };
     struct GetGovPoll_locals
@@ -944,6 +1062,8 @@ public:
         uint64 revenuePoolB;
         uint64 qmineDividendPool;
         uint64 qrwaDividendPool;
+        uint64 dedicatedRevenuePool;
+        uint64 dedicatedQRWADividendPool;
     };
     PUBLIC_FUNCTION(GetDividendBalances)
     {
@@ -951,6 +1071,8 @@ public:
         output.revenuePoolB = state.get().mRevenuePoolB;
         output.qmineDividendPool = state.get().mQmineDividendPool;
         output.qrwaDividendPool = state.get().mQRWADividendPool;
+        output.dedicatedRevenuePool = state.get().mDedicatedRevenuePool;
+        output.dedicatedQRWADividendPool = state.get().mDedicatedQRWADividendPool;
     }
 
     struct GetTotalDistributed_input {};
@@ -1025,7 +1147,7 @@ public:
     struct GetGeneralAssetBalance_locals
     {
         uint64 balance;
-        RWAAsset wrapper;
+        QRWAAsset wrapper;
     };
     PUBLIC_FUNCTION_WITH_LOCALS(GetGeneralAssetBalance) {
         locals.balance = 0;
@@ -1050,7 +1172,7 @@ public:
     struct GetGeneralAssets_locals
     {
         sint64 iterIndex;
-        RWAAsset currentAsset;
+        QRWAAsset currentAsset;
         uint64 currentBalance;
     };
     PUBLIC_FUNCTION_WITH_LOCALS(GetGeneralAssets)
@@ -1085,9 +1207,25 @@ public:
         }
     }
 
+    // GetLatestPayouts (fn 11): Returns the ring buffer of the last QRWA_PAYOUT_RING_SIZE individual payouts.
+    // nextIdx points to the NEXT write position (= oldest entry if buffer is full).
+    // Parse order: entries from nextIdx..nextIdx-1 (mod QRWA_PAYOUT_RING_SIZE), oldest first → newest last.
+    struct GetLatestPayouts_input {};
+    struct GetLatestPayouts_output
+    {
+        Array<QRWAPayoutEntry, QRWA_PAYOUT_RING_SIZE> payouts;
+        uint16 nextIdx; // Next write index (oldest entry position when buffer is full)
+    };
+    PUBLIC_FUNCTION(GetLatestPayouts)
+    {
+        output.payouts = state.get().mLatestPayouts;
+        output.nextIdx = state.get().mLatestPayoutsNextIdx;
+    }
+
     /***************************************************/
     /***************** SYSTEM PROCEDURES ***************/
     /***************************************************/
+
 
     INITIALIZE()
     {
@@ -1104,41 +1242,42 @@ public:
         state.mut().mTreasuryBalance = 0;
         state.mut().mCurrentAssetProposalId = 0;
         setMemory(state.mut().mLastPayoutTime, 0);
+        state.mut().mLastPayoutTick = 0;
 
         // Initialize default governance parameters
         state.mut().mCurrentGovParams.mAdminAddress = ID(
-            _Q, _M, _I, _N, _E, _Q, _Q, _X, _Y, _B, _E, _G, _B, _H, _N, _S,
-            _U, _P, _O, _U, _Y, _D, _I, _Q, _K, _Z, _P, _C, _B, _P, _Q, _I,
-            _I, _H, _U, _U, _Z, _M, _C, _P, _L, _B, _P, _C, _C, _A, _I, _A,
-            _R, _V, _Z, _B, _T, _Y, _K, _G
-        ); // Admin set to QMINE Issuer by default, subject to change via Gov Voting
+            _J, _H, _U, _I, _Z, _P, _G, _Z, _N, _M, _T, _H, _P, _C, _Z, _I,
+            _B, _A, _M, _S, _Z, _Q, _G, _B, _J, _C, _O, _A, _O, _G, _D, _A,
+            _Q, _V, _F, _H, _W, _Y, _K, _L, _E, _G, _G, _R, _M, _J, _E, _J,
+            _S, _X, _T, _R, _E, _U, _V, _C
+        );
         state.mut().mCurrentGovParams.electricityAddress = ID(
-            _Q, _M, _I, _N, _E, _Q, _Q, _X, _Y, _B, _E, _G, _B, _H, _N, _S,
-            _U, _P, _O, _U, _Y, _D, _I, _Q, _K, _Z, _P, _C, _B, _P, _Q, _I,
-            _I, _H, _U, _U, _Z, _M, _C, _P, _L, _B, _P, _C, _C, _A, _I, _A,
-            _R, _V, _Z, _B, _T, _Y, _K, _G
-        ); // Electricity address set to QMINE Issuer by default, subject to change via Gov Voting
+            _J, _T, _I, _D, _B, _A, _Q, _S, _M, _H, _F, _S, _F, _D, _P, _C,
+            _M, _Q, _G, _B, _Z, _V, _R, _N, _N, _T, _K, _A, _J, _N, _Z, _G,
+            _E, _O, _L, _Y, _O, _U, _F, _N, _U, _E, _S, _M, _Q, _L, _N, _G,
+            _W, _J, _B, _A, _R, _G, _Q, _B
+        );
         state.mut().mCurrentGovParams.maintenanceAddress = ID(
-            _Q, _M, _I, _N, _E, _Q, _Q, _X, _Y, _B, _E, _G, _B, _H, _N, _S,
-            _U, _P, _O, _U, _Y, _D, _I, _Q, _K, _Z, _P, _C, _B, _P, _Q, _I,
-            _I, _H, _U, _U, _Z, _M, _C, _P, _L, _B, _P, _C, _C, _A, _I, _A,
-            _R, _V, _Z, _B, _T, _Y, _K, _G
-        ); // Maintenance address set to QMINE Issuer by default, subject to change via Gov Voting
+            _J, _N, _R, _Z, _M, _D, _C, _B, _Q, _Y, _F, _C, _F, _A, _T, _G,
+            _L, _O, _Z, _V, _E, _W, _K, _F, _W, _E, _P, _D, _H, _S, _I, _G,
+            _R, _F, _O, _F, _C, _G, _P, _J, _F, _E, _Z, _Q, _Y, _Q, _Z, _P,
+            _B, _K, _M, _S, _S, _V, _J, _B
+        );
         state.mut().mCurrentGovParams.reinvestmentAddress = ID(
-            _Q, _M, _I, _N, _E, _Q, _Q, _X, _Y, _B, _E, _G, _B, _H, _N, _S,
-            _U, _P, _O, _U, _Y, _D, _I, _Q, _K, _Z, _P, _C, _B, _P, _Q, _I,
-            _I, _H, _U, _U, _Z, _M, _C, _P, _L, _B, _P, _C, _C, _A, _I, _A,
-            _R, _V, _Z, _B, _T, _Y, _K, _G
-        ); // Reinvestment address set to QMINE Issuer by default, subject to change via Gov Voting
+            _C, _Q, _V, _D, _N, _N, _G, _N, _I, _R, _L, _T, _B, _G, _D, _J,
+            _F, _P, _W, _U, _J, _A, _Y, _O, _D, _J, _E, _C, _L, _N, _W, _W,
+            _U, _T, _V, _U, _N, _W, _T, _A, _M, _D, _S, _Y, _F, _B, _N, _K,
+            _S, _N, _D, _C, _A, _Y, _U, _D
+        );
 
         // QMINE DEV's Address for receiving rewards from moved QMINE tokens
         // ZOXXIDCZIMGCECCFAXDDCMBBXCDAQJIHGOOATAFPSBFIOFOYECFKUFPBEMWC
         state.mut().mCurrentGovParams.qmineDevAddress = ID(
-            _Z, _O, _X, _X, _I, _D, _C, _Z, _I, _M, _G, _C, _E, _C, _C, _F,
-            _A, _X, _D, _D, _C, _M, _B, _B, _X, _C, _D, _A, _Q, _J, _I, _H,
-            _G, _O, _O, _A, _T, _A, _F, _P, _S, _B, _F, _I, _O, _F, _O, _Y,
-            _E, _C, _F, _K, _U, _F, _P, _B
-        ); // Default QMINE_DEV address
+            _R, _U, _J, _G, _S, _W, _E, _E, _E, _U, _C, _O, _O, _C, _D, _P,
+            _A, _M, _U, _U, _Z, _S, _H, _I, _R, _Y, _N, _D, _A, _F, _D, _O,
+            _W, _X, _F, _W, _A, _Q, _L, _Z, _R, _B, _N, _X, _G, _E, _X, _Q,
+            _W, _B, _D, _C, _V, _U, _Z, _G
+        );
         state.mut().mCurrentGovParams.electricityPercent = 350;
         state.mut().mCurrentGovParams.maintenancePercent = 50;
         state.mut().mCurrentGovParams.reinvestmentPercent = 100;
@@ -1151,8 +1290,39 @@ public:
         // Initialize revenue pools
         state.mut().mRevenuePoolA = 0;
         state.mut().mRevenuePoolB = 0;
+        state.mut().mDedicatedRevenuePool = 0;
         state.mut().mQmineDividendPool = 0;
         state.mut().mQRWADividendPool = 0;
+        state.mut().mDedicatedQRWADividendPool = 0;
+
+        // Dedicated BTC revenue address (Pool C)
+        // Production: USALFUZBICLZIEMYPSKLYDZJZRFBKYEONUGSWFXOIGRMWSJHLIPMEGZCVCMG
+        // Testnet: WFCELJRTMTYEGHNTYONQOWVQIUYBVBPTSIRCOTJUXFIQAQPEYJQGQQSAVDDM
+        state.mut().mDedicatedRevenueAddress = ID(
+            _W, _F, _C, _E, _L, _J, _R, _T, _M, _T, _Y, _E, _G, _H, _N, _T,
+            _Y, _O, _N, _Q, _O, _W, _V, _Q, _I, _U, _Y, _B, _V, _B, _P, _T,
+            _S, _I, _R, _C, _O, _T, _J, _U, _X, _F, _I, _Q, _A, _Q, _P, _E,
+            _Y, _J, _Q, _G, _Q, _Q, _S, _A
+        );
+
+        // Fundraising address — excluded from ALL distributions
+        // QTDSQGIEAPPMMDDSEHBHHETEUZHBUZXRYFKKTICWAAUXVEWNPCTGCAFBYWWB
+        state.mut().mFundraisingAddress = ID(
+            _Q, _T, _D, _S, _Q, _G, _I, _E, _A, _P, _P, _M, _M, _D, _D, _S,
+            _E, _H, _B, _H, _H, _E, _T, _E, _U, _Z, _H, _B, _U, _Z, _X, _R,
+            _Y, _F, _K, _K, _T, _I, _C, _W, _A, _A, _U, _X, _V, _E, _W, _N,
+            _P, _C, _T, _G, _C, _A, _F, _B
+        );
+
+        // Pool A revenue address (Mining / QMINE issuer)
+        // Production: QMINEQQXYBEGBHNSUPOUYDIQKZPCBPQIIHUUZMCPLBPCCAIARVZBTYKGFCWM
+        // Testnet: IZNUAVRCTNYBQBSFYWBBPQUXASPCYDZYKFFULCEGLCFCEQPTLDTKZQMENKRN
+        state.mut().mPoolARevenueAddress = ID(
+            _I, _Z, _N, _U, _A, _V, _R, _C, _T, _N, _Y, _B, _Q, _B, _S, _F,
+            _Y, _W, _B, _B, _P, _Q, _U, _X, _A, _S, _P, _C, _Y, _D, _Z, _Y,
+            _K, _F, _F, _U, _L, _C, _E, _G, _L, _C, _F, _C, _E, _Q, _P, _T,
+            _L, _D, _T, _K, _Z, _Q, _M, _E
+        );
 
         // Initialize total distributed
         state.mut().mTotalQmineDistributed = 0;
@@ -1176,12 +1346,52 @@ public:
     {
         AssetPossessionIterator iter;
         uint64 balance;
-        RWALogger logger;
+        QRWALogger logger;
         id holder;
         uint64 existingBalance;
+        id newDedicatedAddr;
     };
     BEGIN_EPOCH_WITH_LOCALS()
     {
+        // ── Migration: auto-initialize mPoolARevenueAddress if not set ──
+        // INITIALIZE only runs once at contract creation, so state variables added
+        // after deployment need to be initialized here on first epoch.
+        if (state.get().mPoolARevenueAddress == NULL_ID)
+        {
+            // Testnet: IZNUAVRCTNYBQBSFYWBBPQUXASPCYDZYKFFULCEGLCFCEQPTLDTKZQMENKRN
+            // Production: change to QMINEQQXYBEGBHNSUPOUYDIQKZPCBPQIIHUUZMCPLBPCCAIARVZBTYKGFCWM
+            state.mut().mPoolARevenueAddress = ID(
+                _I, _Z, _N, _U, _A, _V, _R, _C, _T, _N, _Y, _B, _Q, _B, _S, _F,
+                _Y, _W, _B, _B, _P, _Q, _U, _X, _A, _S, _P, _C, _Y, _D, _Z, _Y,
+                _K, _F, _F, _U, _L, _C, _E, _G, _L, _C, _F, _C, _E, _Q, _P, _T,
+                _L, _D, _T, _K, _Z, _Q, _M, _E
+            );
+        }
+
+        // Migration: auto-initialize mFundraisingAddress if not set
+        if (state.get().mFundraisingAddress == NULL_ID)
+        {
+            state.mut().mFundraisingAddress = ID(
+                _Q, _T, _D, _S, _Q, _G, _I, _E, _A, _P, _P, _M, _M, _D, _D, _S,
+                _E, _H, _B, _H, _H, _E, _T, _E, _U, _Z, _H, _B, _U, _Z, _X, _R,
+                _Y, _F, _K, _K, _T, _I, _C, _W, _A, _A, _U, _X, _V, _E, _W, _N,
+                _P, _C, _T, _G, _C, _A, _F, _B
+            );
+        }
+
+        // Migration: update mDedicatedRevenueAddress to new Pool C address
+        // Testnet: WFCELJRTMTYEGHNTYONQOWVQIUYBVBPTSIRCOTJUXFIQAQPEYJQGQQSAVDDM
+        locals.newDedicatedAddr = ID(
+            _W, _F, _C, _E, _L, _J, _R, _T, _M, _T, _Y, _E, _G, _H, _N, _T,
+            _Y, _O, _N, _Q, _O, _W, _V, _Q, _I, _U, _Y, _B, _V, _B, _P, _T,
+            _S, _I, _R, _C, _O, _T, _J, _U, _X, _F, _I, _Q, _A, _Q, _P, _E,
+            _Y, _J, _Q, _G, _Q, _Q, _S, _A
+        );
+        if (state.get().mDedicatedRevenueAddress != locals.newDedicatedAddr)
+        {
+            state.mut().mDedicatedRevenueAddress = locals.newDedicatedAddr;
+        }
+
         // Reset new poll counters
         state.mut().mNewGovPollsThisEpoch = 0;
         state.mut().mNewAssetPollsThisEpoch = 0;
@@ -1198,6 +1408,11 @@ public:
             {
                 // Exclude SELF (Treasury) from dividend snapshot
                 if (locals.iter.possessor() == SELF)
+                {
+                    continue;
+                }
+                // Exclude fundraising address from all distributions
+                if (state.get().mFundraisingAddress != NULL_ID && locals.iter.possessor() == state.get().mFundraisingAddress)
                 {
                     continue;
                 }
@@ -1277,16 +1492,16 @@ public:
         uint64 feePaid;
         uint64 sufficientFunds;
 
-        RWALogger logger;
+        QRWALogger logger;
         uint64 epoch;
 
         sint64 copyIndex;
         id copyHolder;
         uint64 copyBalance;
 
-        RWAAsset wrapper;
+        QRWAAsset wrapper;
 
-        RWAGovProposal govPoll;
+        QRWAGovProposal govPoll;
 
         id holder;
         uint64 existingBalance;
@@ -1302,6 +1517,11 @@ public:
             {
                 // Exclude SELF (Treasury) from dividend snapshot
                 if (locals.iter.possessor() == SELF)
+                {
+                    continue;
+                }
+                // Exclude fundraising address from all distributions
+                if (state.get().mFundraisingAddress != NULL_ID && locals.iter.possessor() == state.get().mFundraisingAddress)
                 {
                     continue;
                 }
@@ -1386,14 +1606,14 @@ public:
             }
         }
 
-        // Calculate 2/3 quorum threshold
+        // Calculate simple majority threshold (>50% of total voting power)
         locals.quorumThreshold = 0;
         if (locals.totalQminePower > 0)
         {
-            locals.quorumThreshold = div<uint64>(sadd(smul(locals.totalQminePower, 2ULL), 2ULL), 3ULL);
+            locals.quorumThreshold = sadd(div<uint64>(locals.totalQminePower, 2ULL), 1ULL);
         }
 
-        // Finalize Gov Vote (check against 2/3 quorum)
+        // Finalize Gov Vote (check against simple majority threshold)
         locals.govPassed = 0;
         if (locals.topScore >= locals.quorumThreshold && locals.topProposalIndex != NULL_INDEX)
         {
@@ -1498,7 +1718,7 @@ public:
                 locals.sufficientFunds = 0;
 
 
-                if (locals.yesVotes >= locals.quorumThreshold) // YES wins
+                if (locals.yesVotes > locals.noVotes) // Simple majority: YES > NO
                 {
                     // Check if asset is QMINE treasury
                     if (locals.poll.asset.issuer == state.get().mQmineAsset.issuer && locals.poll.asset.assetName == state.get().mQmineAsset.assetName)
@@ -1618,7 +1838,7 @@ public:
                     locals.logger.valueA = locals.poll.proposalId;
                     LOG_INFO(locals.logger);
                 }
-                else // Vote failed (NO wins or < quorum)
+                else // Vote failed (simple majority not reached)
                 {
                     locals.poll.status = QRWA_POLL_STATUS_FAILED_VOTE;
                 }
@@ -1679,8 +1899,17 @@ public:
         uint64 totalDistribution;
         uint64 qminePayout;
         uint64 qrwaPayout;
+        uint64 dedicatedQminePayout;
+        uint64 dedicatedQrwaPayout;
         uint64 amountPerQRWAShare;
         uint64 distributedAmount;
+        uint64 eligibleShares;
+        uint64 dedicatedEligibleShares;
+        uint64 dedicatedAmountPerShare;
+        uint64 dedicatedDistributed;
+        uint64 qrwaShares;
+        uint64 requiredQmine;
+        sint64 qmineBalance;
 
         sint64 qminePayoutIndex;
         id holder;
@@ -1695,39 +1924,19 @@ public:
         uint128 qmineDividendPool_128;
         uint64 payout_u64;
         uint64 foundEnd;
-        RWALogger logger;
+        QRWALogger logger;
+        QRWAPayoutEntry payoutEntry; // Reused for ring buffer writes
+        AssetPossessionIterator qrwaIter;
+        Asset qrwaAsset;
     };
     END_TICK_WITH_LOCALS()
     {
         locals.now = qpi.now();
 
-        // Check payout conditions: Correct day, correct hour, and enough time passed
-        if (qpi.dayOfWeek((uint8)mod(locals.now.getYear(), (uint16)100), locals.now.getMonth(), locals.now.getDay()) == QRWA_PAYOUT_DAY &&
-            locals.now.getHour() == QRWA_PAYOUT_HOUR)
+        // TESTING: Check every 100 ticks for payout distribution
+        // Production: Use day/hour check instead (QRWA_PAYOUT_DAY + QRWA_PAYOUT_HOUR)
+        if (state.get().mLastPayoutTick == 0 || (qpi.tick() - state.get().mLastPayoutTick) >= QRWA_PAYOUT_TICK_INTERVAL)
         {
-            // check if mLastPayoutTime is 0 (never initialized)
-            if (state.get().mLastPayoutTime.getYear() == 0)
-            {
-                // If never paid, treat as if enough time has passed
-                locals.msSinceLastPayout = QRWA_MIN_PAYOUT_INTERVAL_MS;
-            }
-            else
-            {
-                locals.durationMicros = state.get().mLastPayoutTime.durationMicrosec(locals.now);
-
-                if (locals.durationMicros != UINT64_MAX)
-                {
-                    locals.msSinceLastPayout = div<uint64>(locals.durationMicros, 1000);
-                }
-                else
-                {
-                    // If it's invalid but NOT zero, something is wrong, so we prevent payout
-                    locals.msSinceLastPayout = 0;
-                }
-            }
-
-            if (locals.msSinceLastPayout >= QRWA_MIN_PAYOUT_INTERVAL_MS)
-            {
                 locals.logger.contractId = CONTRACT_INDEX;
                 locals.logger.logType = QRWA_LOG_TYPE_DISTRIBUTION;
 
@@ -1809,6 +2018,17 @@ public:
                     state.mut().mRevenuePoolB = 0;
                 }
 
+                // Allocate Pool C (BTC Mining) revenue pool: split into QMINE leg + dedicated qRWA leg
+                if (state.get().mDedicatedRevenuePool > 0)
+                {
+                    locals.dedicatedQminePayout = div<uint64>(smul(state.get().mDedicatedRevenuePool, QRWA_QMINE_HOLDER_PERCENT), QRWA_PERCENT_DENOMINATOR);
+                    locals.dedicatedQrwaPayout = state.get().mDedicatedRevenuePool - locals.dedicatedQminePayout;
+
+                    state.mut().mQmineDividendPool = sadd(state.get().mQmineDividendPool, locals.dedicatedQminePayout);
+                    state.mut().mDedicatedQRWADividendPool = sadd(state.get().mDedicatedQRWADividendPool, locals.dedicatedQrwaPayout);
+                    state.mut().mDedicatedRevenuePool = 0;
+                }
+
                 // Distribute QMINE rewards
                 if (state.get().mQmineDividendPool > 0 && state.get().mPayoutTotalQmineBegin > 0)
                 {
@@ -1828,13 +2048,20 @@ public:
                         locals.holder = state.get().mPayoutBeginBalances.key(locals.qminePayoutIndex);
                         locals.beginBalance = state.get().mPayoutBeginBalances.value(locals.qminePayoutIndex);
 
+                        // Exclude fundraising address
+                        if (state.get().mFundraisingAddress != NULL_ID && locals.holder == state.get().mFundraisingAddress)
+                        {
+                            continue;
+                        }
+
                         locals.foundEnd = state.get().mPayoutEndBalances.get(locals.holder, locals.endBalance) ? 1 : 0;
                         if (locals.foundEnd == 0)
                         {
                             locals.endBalance = 0;
                         }
 
-                        locals.eligibleBalance = (locals.beginBalance < locals.endBalance) ? locals.beginBalance : locals.endBalance;
+                        // If holder reduced shares during the epoch → zero payout, full portion to dev
+                        locals.eligibleBalance = (locals.endBalance >= locals.beginBalance) ? locals.beginBalance : 0;
 
                         if (locals.eligibleBalance > 0)
                         {
@@ -1855,6 +2082,18 @@ public:
                                         locals.qmineDividendPool_128 -= locals.eligiblePayout_128;
                                         state.mut().mTotalQmineDistributed = sadd(state.get().mTotalQmineDistributed, locals.payout_u64);
                                         locals.totalEligiblePaid_128 += locals.eligiblePayout_128;
+                                        locals.payoutEntry.recipient = locals.holder;
+                                        locals.payoutEntry.amount = locals.payout_u64;
+                                        locals.payoutEntry.tick = qpi.tick();
+                                        locals.payoutEntry.payoutType = QRWA_PAYOUT_TYPE_QMINE_HOLDER;
+                                        state.mut().mLatestPayouts.set(state.get().mLatestPayoutsNextIdx, locals.payoutEntry);
+                                        state.mut().mLatestPayoutsNextIdx = (state.get().mLatestPayoutsNextIdx + 1) & (QRWA_PAYOUT_RING_SIZE - 1);
+                                        locals.logger.contractId = CONTRACT_INDEX;
+                                        locals.logger.logType = QRWA_LOG_TYPE_PAYOUT_QMINE_HOLDER;
+                                        locals.logger.primaryId = locals.holder;
+                                        locals.logger.valueA = locals.payout_u64;
+                                        locals.logger.valueB = locals.eligibleBalance;
+                                        LOG_INFO(locals.logger);
                                     }
                                     else
                                     {
@@ -1878,6 +2117,18 @@ public:
                                         state.mut().mTotalQmineDistributed = sadd(state.get().mTotalQmineDistributed, locals.payout_u64);
                                         locals.totalEligiblePaid_128 += locals.qmineDividendPool_128;
                                         locals.qmineDividendPool_128 = 0; // Pool exhausted
+                                        locals.payoutEntry.recipient = locals.holder;
+                                        locals.payoutEntry.amount = locals.payout_u64;
+                                        locals.payoutEntry.tick = qpi.tick();
+                                        locals.payoutEntry.payoutType = QRWA_PAYOUT_TYPE_QMINE_HOLDER;
+                                        state.mut().mLatestPayouts.set(state.get().mLatestPayoutsNextIdx, locals.payoutEntry);
+                                        state.mut().mLatestPayoutsNextIdx = (state.get().mLatestPayoutsNextIdx + 1) & (QRWA_PAYOUT_RING_SIZE - 1);
+                                        locals.logger.contractId = CONTRACT_INDEX;
+                                        locals.logger.logType = QRWA_LOG_TYPE_PAYOUT_QMINE_HOLDER;
+                                        locals.logger.primaryId = locals.holder;
+                                        locals.logger.valueA = locals.payout_u64;
+                                        locals.logger.valueB = locals.eligibleBalance;
+                                        LOG_INFO(locals.logger);
                                     }
                                     else
                                     {
@@ -1904,6 +2155,12 @@ public:
                             {
                                 state.mut().mTotalQmineDistributed = sadd(state.get().mTotalQmineDistributed, locals.payout_u64);
                                 locals.qmineDividendPool_128 = 0;
+                                locals.payoutEntry.recipient = state.get().mCurrentGovParams.qmineDevAddress;
+                                locals.payoutEntry.amount = locals.payout_u64;
+                                locals.payoutEntry.tick = qpi.tick();
+                                locals.payoutEntry.payoutType = QRWA_PAYOUT_TYPE_QMINE_DEV;
+                                state.mut().mLatestPayouts.set(state.get().mLatestPayoutsNextIdx, locals.payoutEntry);
+                                state.mut().mLatestPayoutsNextIdx = (state.get().mLatestPayoutsNextIdx + 1) & (QRWA_PAYOUT_RING_SIZE - 1);
                             }
                             else
                             {
@@ -1921,44 +2178,271 @@ public:
                     state.mut().mQmineDividendPool = locals.qmineDividendPool_128.low;
                 } // End QMINE distribution
 
-                // Distribute qRWA shareholder rewards
+                // Distribute qRWA shareholder rewards (Pool B — all qRWA holders, no QMINE requirement)
                 if (state.get().mQRWADividendPool > 0)
                 {
-                    locals.amountPerQRWAShare = div<uint64>(state.get().mQRWADividendPool, NUMBER_OF_COMPUTORS);
-                    if (locals.amountPerQRWAShare > 0)
+                    locals.qrwaAsset.issuer = id::zero();
+                    locals.qrwaAsset.assetName = QRWA_CONTRACT_ASSET_NAME;
+                    locals.eligibleShares = 0;
+
+                    // First pass: count eligible shares
+                    for (locals.qrwaIter.begin(locals.qrwaAsset); !locals.qrwaIter.reachedEnd(); locals.qrwaIter.next())
                     {
-                        if (qpi.distributeDividends(static_cast<sint64>(locals.amountPerQRWAShare)))
+                        locals.qrwaShares = static_cast<uint64>(locals.qrwaIter.numberOfPossessedShares());
+                        if (locals.qrwaShares == 0)
                         {
-                            locals.distributedAmount = smul(locals.amountPerQRWAShare, static_cast<uint64>(NUMBER_OF_COMPUTORS));
-                            state.mut().mQRWADividendPool -= locals.distributedAmount;
+                            continue;
+                        }
+
+                        locals.holder = locals.qrwaIter.possessor();
+                        if (locals.holder == SELF)
+                        {
+                            continue;
+                        }
+                        // Exclude fundraising address
+                        if (state.get().mFundraisingAddress != NULL_ID && locals.holder == state.get().mFundraisingAddress)
+                        {
+                            continue;
+                        }
+
+                        locals.eligibleShares = sadd(locals.eligibleShares, locals.qrwaShares);
+                    }
+
+                    if (locals.eligibleShares > 0)
+                    {
+                        locals.amountPerQRWAShare = div<uint64>(state.get().mQRWADividendPool, locals.eligibleShares);
+                        if (locals.amountPerQRWAShare > 0)
+                        {
+                            locals.distributedAmount = 0;
+
+                            // Second pass: distribute to eligible holders
+                            for (locals.qrwaIter.begin(locals.qrwaAsset); !locals.qrwaIter.reachedEnd(); locals.qrwaIter.next())
+                            {
+                                locals.qrwaShares = static_cast<uint64>(locals.qrwaIter.numberOfPossessedShares());
+                                if (locals.qrwaShares == 0)
+                                {
+                                    continue;
+                                }
+
+                                locals.holder = locals.qrwaIter.possessor();
+                                if (locals.holder == SELF)
+                                {
+                                    continue;
+                                }
+                                // Exclude fundraising address
+                                if (state.get().mFundraisingAddress != NULL_ID && locals.holder == state.get().mFundraisingAddress)
+                                {
+                                    continue;
+                                }
+
+                                locals.payout_u64 = smul(locals.amountPerQRWAShare, locals.qrwaShares);
+                                if (locals.payout_u64 > 0)
+                                {
+                                    if (qpi.transfer(locals.holder, static_cast<sint64>(locals.payout_u64)) >= 0)
+                                    {
+                                        locals.distributedAmount = sadd(locals.distributedAmount, locals.payout_u64);
+                                        locals.payoutEntry.recipient = locals.holder;
+                                        locals.payoutEntry.amount = locals.payout_u64;
+                                        locals.payoutEntry.tick = qpi.tick();
+                                        locals.payoutEntry.payoutType = QRWA_PAYOUT_TYPE_QRWA_HOLDER;
+                                        state.mut().mLatestPayouts.set(state.get().mLatestPayoutsNextIdx, locals.payoutEntry);
+                                        state.mut().mLatestPayoutsNextIdx = (state.get().mLatestPayoutsNextIdx + 1) & (QRWA_PAYOUT_RING_SIZE - 1);
+                                        locals.logger.contractId = CONTRACT_INDEX;
+                                        locals.logger.logType = QRWA_LOG_TYPE_PAYOUT_QRWA_HOLDER;
+                                        locals.logger.primaryId = locals.holder;
+                                        locals.logger.valueA = locals.payout_u64;
+                                        locals.logger.valueB = locals.qrwaShares;
+                                        LOG_INFO(locals.logger);
+                                    }
+                                    else
+                                    {
+                                        locals.logger.logType = QRWA_LOG_TYPE_ERROR;
+                                        locals.logger.primaryId = locals.holder;
+                                        locals.logger.valueA = locals.payout_u64;
+                                        locals.logger.valueB = QRWA_STATUS_FAILURE_TRANSFER_FAILED;
+                                        LOG_INFO(locals.logger);
+                                    }
+                                }
+                            }
+
+                            if (state.get().mQRWADividendPool > locals.distributedAmount)
+                            {
+                                state.mut().mQRWADividendPool -= locals.distributedAmount;
+                            }
+                            else
+                            {
+                                state.mut().mQRWADividendPool = 0;
+                            }
                             state.mut().mTotalQRWADistributed = sadd(state.get().mTotalQRWADistributed, locals.distributedAmount);
                         }
                     }
                 }
 
-                // Update last payout time
+                // Distribute dedicated qRWA leg of Pool C to eligible shareholders (requires >= 100K QMINE per qRWA share)
+                if (state.get().mDedicatedQRWADividendPool > 0)
+                {
+                    locals.qrwaAsset.issuer = id::zero();
+                    locals.qrwaAsset.assetName = QRWA_CONTRACT_ASSET_NAME;
+                    locals.dedicatedEligibleShares = 0;
+
+                    for (locals.qrwaIter.begin(locals.qrwaAsset); !locals.qrwaIter.reachedEnd(); locals.qrwaIter.next())
+                    {
+                        locals.qrwaShares = static_cast<uint64>(locals.qrwaIter.numberOfPossessedShares());
+                        if (locals.qrwaShares == 0)
+                        {
+                            continue;
+                        }
+
+                        locals.holder = locals.qrwaIter.possessor();
+                        if (locals.holder == SELF)
+                        {
+                            continue;
+                        }
+                        // Exclude fundraising address
+                        if (state.get().mFundraisingAddress != NULL_ID && locals.holder == state.get().mFundraisingAddress)
+                        {
+                            continue;
+                        }
+
+                        locals.qmineBalance = qpi.numberOfShares(
+                            state.get().mQmineAsset,
+                            AssetOwnershipSelect::byOwner(locals.holder),
+                            AssetPossessionSelect::byPossessor(locals.holder)
+                        );
+
+                        if (locals.qmineBalance <= 0)
+                        {
+                            continue;
+                        }
+
+                        locals.requiredQmine = smul(locals.qrwaShares, QRWA_QMINE_PER_QRWA_SHARE_MIN);
+                        if (static_cast<uint64>(locals.qmineBalance) >= locals.requiredQmine)
+                        {
+                            locals.dedicatedEligibleShares = sadd(locals.dedicatedEligibleShares, locals.qrwaShares);
+                        }
+                    }
+
+                    if (locals.dedicatedEligibleShares > 0)
+                    {
+                        locals.dedicatedAmountPerShare = div<uint64>(state.get().mDedicatedQRWADividendPool, locals.dedicatedEligibleShares);
+                        if (locals.dedicatedAmountPerShare > 0)
+                        {
+                            locals.dedicatedDistributed = 0;
+                            for (locals.qrwaIter.begin(locals.qrwaAsset); !locals.qrwaIter.reachedEnd(); locals.qrwaIter.next())
+                            {
+                                locals.qrwaShares = static_cast<uint64>(locals.qrwaIter.numberOfPossessedShares());
+                                if (locals.qrwaShares == 0)
+                                {
+                                    continue;
+                                }
+
+                                locals.holder = locals.qrwaIter.possessor();
+                                if (locals.holder == SELF)
+                                {
+                                    continue;
+                                }
+                                // Exclude fundraising address
+                                if (state.get().mFundraisingAddress != NULL_ID && locals.holder == state.get().mFundraisingAddress)
+                                {
+                                    continue;
+                                }
+
+                                locals.qmineBalance = qpi.numberOfShares(
+                                    state.get().mQmineAsset,
+                                    AssetOwnershipSelect::byOwner(locals.holder),
+                                    AssetPossessionSelect::byPossessor(locals.holder)
+                                );
+
+                                if (locals.qmineBalance <= 0)
+                                {
+                                    continue;
+                                }
+
+                                locals.requiredQmine = smul(locals.qrwaShares, QRWA_QMINE_PER_QRWA_SHARE_MIN);
+                                if (static_cast<uint64>(locals.qmineBalance) < locals.requiredQmine)
+                                {
+                                    continue;
+                                }
+
+                                locals.payout_u64 = smul(locals.dedicatedAmountPerShare, locals.qrwaShares);
+                                if (locals.payout_u64 > 0)
+                                {
+                                    if (qpi.transfer(locals.holder, static_cast<sint64>(locals.payout_u64)) >= 0)
+                                    {
+                                        locals.dedicatedDistributed = sadd(locals.dedicatedDistributed, locals.payout_u64);
+                                        locals.payoutEntry.recipient = locals.holder;
+                                        locals.payoutEntry.amount = locals.payout_u64;
+                                        locals.payoutEntry.tick = qpi.tick();
+                                        locals.payoutEntry.payoutType = QRWA_PAYOUT_TYPE_DEDICATED_QRWA;
+                                        state.mut().mLatestPayouts.set(state.get().mLatestPayoutsNextIdx, locals.payoutEntry);
+                                        state.mut().mLatestPayoutsNextIdx = (state.get().mLatestPayoutsNextIdx + 1) & (QRWA_PAYOUT_RING_SIZE - 1);
+                                        locals.logger.contractId = CONTRACT_INDEX;
+                                        locals.logger.logType = QRWA_LOG_TYPE_PAYOUT_DEDICATED_QRWA;
+                                        locals.logger.primaryId = locals.holder;
+                                        locals.logger.valueA = locals.payout_u64;
+                                        locals.logger.valueB = locals.qrwaShares;
+                                        LOG_INFO(locals.logger);
+                                    }
+                                    else
+                                    {
+                                        locals.logger.logType = QRWA_LOG_TYPE_ERROR;
+                                        locals.logger.primaryId = locals.holder;
+                                        locals.logger.valueA = locals.payout_u64;
+                                        locals.logger.valueB = QRWA_STATUS_FAILURE_TRANSFER_FAILED;
+                                        LOG_INFO(locals.logger);
+                                    }
+                                }
+                            }
+
+                            if (state.get().mDedicatedQRWADividendPool > locals.dedicatedDistributed)
+                            {
+                                state.mut().mDedicatedQRWADividendPool -= locals.dedicatedDistributed;
+                            }
+                            else
+                            {
+                                state.mut().mDedicatedQRWADividendPool = 0;
+                            }
+                            state.mut().mTotalQRWADistributed = sadd(state.get().mTotalQRWADistributed, locals.dedicatedDistributed);
+                        }
+                    }
+                }
+
+                // Update last payout time/tick
                 state.mut().mLastPayoutTime = qpi.now();
+                state.mut().mLastPayoutTick = qpi.tick();
                 locals.logger.logType = QRWA_LOG_TYPE_DISTRIBUTION;
                 locals.logger.primaryId = NULL_ID;
                 locals.logger.valueA = 1; // Indicate success
                 locals.logger.valueB = 0;
                 LOG_INFO(locals.logger);
-            }
         }
     }
 
     struct POST_INCOMING_TRANSFER_locals
     {
-        RWALogger logger;
+        QRWALogger logger;
     };
     POST_INCOMING_TRANSFER_WITH_LOCALS()
     {
-        // Differentiate revenue streams based on source type
-        // Only deposit to Pool A if source is QUTIL
-        // All other transfers (users or other contracts) go to Pool B
-        if (input.sourceId == id(QUTIL_CONTRACT_INDEX, 0, 0, 0))
+        // Revenue routing:
+        // Pool A: QUTIL contract OR mPoolARevenueAddress (QMINE issuer / mining revenue)
+        // Pool C: Dedicated BTC revenue address (mDedicatedRevenueAddress)
+        // Pool B: Everything else (users, other contracts)
+        if (state.get().mDedicatedRevenueAddress != NULL_ID && input.sourceId == state.get().mDedicatedRevenueAddress)
         {
-            // Source is explicitly QUTIL -> Pool A
+            // Pool C: Dedicated BTC revenue address
+            state.mut().mDedicatedRevenuePool = sadd(state.get().mDedicatedRevenuePool, static_cast<uint64>(input.amount));
+            locals.logger.contractId = CONTRACT_INDEX;
+            locals.logger.logType = QRWA_LOG_TYPE_INCOMING_REVENUE_DEDICATED;
+            locals.logger.primaryId = input.sourceId;
+            locals.logger.valueA = input.amount;
+            locals.logger.valueB = input.type;
+            LOG_INFO(locals.logger);
+        }
+        else if (input.sourceId == id(QUTIL_CONTRACT_INDEX, 0, 0, 0) ||
+                 (state.get().mPoolARevenueAddress != NULL_ID && input.sourceId == state.get().mPoolARevenueAddress))
+        {
+            // Pool A: QUTIL (SendToMany) or direct transfer from Pool A revenue address
             state.mut().mRevenuePoolA = sadd(state.get().mRevenuePoolA, static_cast<uint64>(input.amount));
             locals.logger.contractId = CONTRACT_INDEX;
             locals.logger.logType = QRWA_LOG_TYPE_INCOMING_REVENUE_A;
@@ -1969,7 +2453,7 @@ public:
         }
         else if (input.sourceId != NULL_ID)
         {
-            // Source is NOT QUTIL (User or other Contract) -> Pool B
+            // Pool B: All other sources (users, other contracts)
             state.mut().mRevenuePoolB = sadd(state.get().mRevenuePoolB, static_cast<uint64>(input.amount));
             locals.logger.contractId = CONTRACT_INDEX;
             locals.logger.logType = QRWA_LOG_TYPE_INCOMING_REVENUE_B;
@@ -1987,8 +2471,48 @@ public:
         output.allowTransfer = true;
     }
 
-    POST_ACQUIRE_SHARES()
+    struct POST_ACQUIRE_SHARES_locals
     {
+        sint64 transferResult;
+        uint64 currentAssetBalance;
+        QRWAAsset wrapper;
+        QRWALogger logger;
+    };
+    POST_ACQUIRE_SHARES_WITH_LOCALS()
+    {
+        // Automatically lock shares permanently: transfer ownership+possession from
+        // the previous owner/possessor to SELF and record in mGeneralAssetBalances.
+        // This allows any user to deposit SC shares in 2 steps:
+        //   1. Buy shares on QX
+        //   2. Transfer management rights to qRWA (this callback fires automatically)
+        locals.transferResult = qpi.transferShareOwnershipAndPossession(
+            input.asset.assetName,
+            input.asset.issuer,
+            input.owner,          // current owner
+            input.possessor,      // current possessor
+            input.numberOfShares,
+            SELF                  // new owner and possessor (permanent lock)
+        );
+
+        locals.logger.contractId = CONTRACT_INDEX;
+        locals.logger.logType = QRWA_LOG_TYPE_ADMIN_ACTION;
+        locals.logger.primaryId = input.owner;
+        locals.logger.valueA = input.asset.assetName;
+
+        if (locals.transferResult >= 0)
+        {
+            locals.wrapper.setFrom(input.asset);
+            state.get().mGeneralAssetBalances.get(locals.wrapper, locals.currentAssetBalance); // 0 if not present
+            locals.currentAssetBalance = sadd(locals.currentAssetBalance, (uint64)input.numberOfShares);
+            state.mut().mGeneralAssetBalances.set(locals.wrapper, locals.currentAssetBalance);
+            locals.logger.valueB = QRWA_STATUS_SUCCESS;
+        }
+        else
+        {
+            locals.logger.valueB = QRWA_STATUS_FAILURE_TRANSFER_FAILED;
+        }
+
+        LOG_INFO(locals.logger);
     }
 
     REGISTER_USER_FUNCTIONS_AND_PROCEDURES()
@@ -2000,6 +2524,7 @@ public:
         REGISTER_USER_PROCEDURE(VoteAssetRelease, 6);
         REGISTER_USER_PROCEDURE(DepositGeneralAsset, 7);
         REGISTER_USER_PROCEDURE(RevokeAssetManagementRights, 8);
+        REGISTER_USER_PROCEDURE(SetPoolARevenueAddress, 9);
 
         // FUNCTIONS
         REGISTER_USER_FUNCTION(GetGovParams, 1);
@@ -2012,5 +2537,6 @@ public:
         REGISTER_USER_FUNCTION(GetActiveGovPollIds, 8);
         REGISTER_USER_FUNCTION(GetGeneralAssetBalance, 9);
         REGISTER_USER_FUNCTION(GetGeneralAssets, 10);
+        REGISTER_USER_FUNCTION(GetLatestPayouts, 11);
     }
 };
