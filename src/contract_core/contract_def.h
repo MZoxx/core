@@ -378,7 +378,7 @@ constexpr struct ContractDescription
 	{"QTF", 199, 10000, sizeof(QTF::StateData)}, // proposal in epoch 197, IPO in 198, construction and first use in 199
     {"QDUEL", 199, 10000, sizeof(QDUEL::StateData)}, // proposal in epoch 197, IPO in 198, construction and first use in 199
 	{"PULSE", 204, 10000, sizeof(PULSE::StateData)}, // proposal in epoch 202, IPO in 203, construction and first use in 204
-    {"QRACEL", 174, 10000, sizeof(QRACEL::StateData)}, // testnet start epoch is 174
+    {"QRACEL", 204, 10000, sizeof(QRACEL::StateData)}, // testnet start epoch is 204
     // new contracts should be added above this line
 #ifdef INCLUDE_CONTRACT_TEST_EXAMPLES
     {"TESTEXA", 138, 10000, sizeof(TESTEXA::StateData)},
