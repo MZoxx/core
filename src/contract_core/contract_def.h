@@ -112,7 +112,11 @@
 #define CONTRACT_INDEX QVAULT_CONTRACT_INDEX
 #define CONTRACT_STATE_TYPE QVAULT
 #define CONTRACT_STATE2_TYPE QVAULT2
+#ifdef OLD_QVAULT
+#include "contracts/QVAULT_old.h"
+#else
 #include "contracts/QVAULT.h"
+#endif
 
 #undef CONTRACT_INDEX
 #undef CONTRACT_STATE_TYPE
@@ -374,7 +378,7 @@ constexpr struct ContractDescription
 	{"QTF", 199, 10000, sizeof(QTF::StateData)}, // proposal in epoch 197, IPO in 198, construction and first use in 199
     {"QDUEL", 199, 10000, sizeof(QDUEL::StateData)}, // proposal in epoch 197, IPO in 198, construction and first use in 199
 	{"PULSE", 204, 10000, sizeof(PULSE::StateData)}, // proposal in epoch 202, IPO in 203, construction and first use in 204
-    {"QRACEL", 204, 10000, sizeof(QRACEL::StateData)}, // proposal in epoch 202, IPO in 203, construction and first use in 204
+    {"QRACEL", 204, 10000, sizeof(QRACEL::StateData)}, // construction and first use in 204
     // new contracts should be added above this line
 #ifdef INCLUDE_CONTRACT_TEST_EXAMPLES
     {"TESTEXA", 138, 10000, sizeof(TESTEXA::StateData)},
