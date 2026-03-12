@@ -371,6 +371,11 @@ struct QRACEL : public ContractBase
         uint64 rhs;
     };
 
+    struct INITIALIZE_locals
+    {
+        uint32 i;
+    };
+
     struct END_TICK_locals
     {
         uint8 i;
@@ -934,7 +939,7 @@ struct QRACEL : public ContractBase
         output.roundId = locals.round.roundId;
     }
 
-    INITIALIZE()
+    INITIALIZE_WITH_LOCALS()
     {
         state.mut().admin = NULL_ID;
         state.mut().oracleId = OI::Price::getBinanceGateOracleId();
@@ -950,9 +955,9 @@ struct QRACEL : public ContractBase
         state.mut().roundIdToIndex.reset();
         state.mut().oracleQueryContext.reset();
 
-        for (uint32 i = 0; i < QRACEL_DURATION_COUNT; ++i)
+        for (locals.i = 0; locals.i < QRACEL_DURATION_COUNT; ++locals.i)
         {
-            state.mut().activeRoundByDuration.set(i, NULL_INDEX);
+            state.mut().activeRoundByDuration.set(locals.i, NULL_INDEX);
         }
     }
 
