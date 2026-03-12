@@ -947,7 +947,7 @@ struct QRACEL : public ContractBase
             _L, _D, _J, _D, _H, _O, _U, _I, _N, _K, _E, _Y, _X, _B,
             _V, _I, _T, _A, _D, _M, _W, _G, _X, _H, _H, _Q, _E, _G
         );
-        state.mut().oracleId = OI::Price::getBinanceGateOracleId();
+        state.mut().oracleId = OI::Price::getBinanceOracleId();
         state.mut().autoCreate = 1;
         state.mut()._pad0 = 0;
         state.mut()._pad1 = 0;
