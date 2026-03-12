@@ -1113,6 +1113,5 @@ struct QRACEL : public ContractBase
     }
 
     EXPAND()
-    {
     }
 };
