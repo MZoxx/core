@@ -30,12 +30,40 @@ QPI::sint64 QPI::QpiContextProcedureCall::__qpiQueryOracle(
 
 	// check callback
 	if (!notificationProcPtr || ContractStateType::__contract_index != contractIndex)
+	{
+#if !defined(NO_UEFI)
+		CHAR16 dbgMsg[200];
+		setText(dbgMsg, L"__qpiQueryOracle FAIL cb: ptr=");
+		appendNumber(dbgMsg, (unsigned long long)(void*)notificationProcPtr, FALSE);
+		appendText(dbgMsg, L" sci=");
+		appendNumber(dbgMsg, ContractStateType::__contract_index, FALSE);
+		appendText(dbgMsg, L" ci=");
+		appendNumber(dbgMsg, contractIndex, FALSE);
+		addDebugMessage(dbgMsg);
+#endif
 		return -1;
+	}
 
 	// check vs registry of user procedures for notification
 	const UserProcedureRegistry::UserProcedureData* procData;
 	if (!userProcedureRegistry || !(procData = userProcedureRegistry->get(notificationProcId)) || procData->procedure != (USER_PROCEDURE)notificationProcPtr)
+	{
+#if !defined(NO_UEFI)
+		CHAR16 dbgMsg[200];
+		setText(dbgMsg, L"__qpiQueryOracle FAIL reg: r=");
+		appendNumber(dbgMsg, (unsigned long long)(void*)userProcedureRegistry, FALSE);
+		appendText(dbgMsg, L" id=");
+		appendNumber(dbgMsg, notificationProcId, FALSE);
+		if (userProcedureRegistry)
+		{
+			auto* pd = userProcedureRegistry->get(notificationProcId);
+			appendText(dbgMsg, L" f=");
+			appendNumber(dbgMsg, pd ? 1 : 0, FALSE);
+		}
+		addDebugMessage(dbgMsg);
+#endif
 		return -1;
+	}
 	ASSERT(procData->inputSize == sizeof(OracleNotificationInput<OracleInterface>));
 	ASSERT(procData->localsSize == sizeof(LocalsType));
 

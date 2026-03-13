@@ -176,6 +176,14 @@ struct QRACEL : public ContractBase
         uint8 status;
     };
 
+    struct Fund_input
+    {
+    };
+    struct Fund_output
+    {
+        uint8 status;
+    };
+
     struct CreateRound_input
     {
         uint8 durationType;
@@ -397,6 +405,7 @@ struct QRACEL : public ContractBase
         REGISTER_USER_PROCEDURE(ClaimWinnings, 4);
         REGISTER_USER_PROCEDURE(SetAutoCreate, 5);
         REGISTER_USER_PROCEDURE(SetOracle, 6);
+        REGISTER_USER_PROCEDURE(Fund, 7);
 
         REGISTER_USER_FUNCTION(GetRound, 1);
         REGISTER_USER_FUNCTION(GetBet, 2);
@@ -445,6 +454,11 @@ struct QRACEL : public ContractBase
         }
 
         state.mut().oracleId = input.oracleId;
+        output.status = QRACEL_STATUS_SUCCESS;
+    }
+
+    PUBLIC_PROCEDURE(Fund)
+    {
         output.status = QRACEL_STATUS_SUCCESS;
     }
 
