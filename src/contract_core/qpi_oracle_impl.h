@@ -31,7 +31,7 @@ QPI::sint64 QPI::QpiContextProcedureCall::__qpiQueryOracle(
 	// check callback
 	if (!notificationProcPtr || ContractStateType::__contract_index != contractIndex)
 	{
-#if !defined(NO_UEFI)
+#if !defined(NDEBUG) && !defined(NO_UEFI)
 		CHAR16 dbgMsg[200];
 		setText(dbgMsg, L"__qpiQueryOracle FAIL cb: ptr=");
 		appendNumber(dbgMsg, (unsigned long long)(void*)notificationProcPtr, FALSE);
@@ -48,7 +48,7 @@ QPI::sint64 QPI::QpiContextProcedureCall::__qpiQueryOracle(
 	const UserProcedureRegistry::UserProcedureData* procData;
 	if (!userProcedureRegistry || !(procData = userProcedureRegistry->get(notificationProcId)) || procData->procedure != (USER_PROCEDURE)notificationProcPtr)
 	{
-#if !defined(NO_UEFI)
+#if !defined(NDEBUG) && !defined(NO_UEFI)
 		CHAR16 dbgMsg[200];
 		setText(dbgMsg, L"__qpiQueryOracle FAIL reg: r=");
 		appendNumber(dbgMsg, (unsigned long long)(void*)userProcedureRegistry, FALSE);
