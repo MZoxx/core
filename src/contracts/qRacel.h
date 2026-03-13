@@ -107,6 +107,9 @@ struct QRACEL : public ContractBase
         uint64 nextRoundId;
         uint64 totalVolume;
         uint64 totalPayouts;
+        sint64 dbgLastQueryId;
+        uint32 dbgCreateRoundCalls;
+        uint32 dbgOracleFails;
         Array<RoundData, QRACEL_MAX_ROUNDS> rounds;
         Array<BetData, QRACEL_MAX_BETS> bets;
         Array<uint32, QRACEL_DURATION_COUNT> activeRoundByDuration;
@@ -338,6 +341,9 @@ struct QRACEL : public ContractBase
         uint64 activeRound60m;
         uint64 activeRound6h;
         uint64 activeRound24h;
+        sint64 dbgLastQueryId;
+        uint32 dbgCreateRoundCalls;
+        uint32 dbgOracleFails;
     };
     struct GetConfig_locals
     {
@@ -522,9 +528,12 @@ struct QRACEL : public ContractBase
         locals.round._pad0 = 0;
 
         setupBtcUsdtQuery(state.get().oracleId, qpi.now(), locals.query);
+        state.mut().dbgCreateRoundCalls = state.get().dbgCreateRoundCalls + 1;
         locals.queryId = QUERY_ORACLE(OI::Price, locals.query, NotifyPriceOracleReply, QRACEL_ORACLE_TIMEOUT_MS);
+        state.mut().dbgLastQueryId = locals.queryId;
         if (locals.queryId < 0)
         {
+            state.mut().dbgOracleFails = state.get().dbgOracleFails + 1;
             output.status = QRACEL_STATUS_ORACLE_FAILED;
             return;
         }
@@ -909,6 +918,9 @@ struct QRACEL : public ContractBase
         output.activeRound60m = 0;
         output.activeRound6h = 0;
         output.activeRound24h = 0;
+        output.dbgLastQueryId = state.get().dbgLastQueryId;
+        output.dbgCreateRoundCalls = state.get().dbgCreateRoundCalls;
+        output.dbgOracleFails = state.get().dbgOracleFails;
 
         locals.idx = state.get().activeRoundByDuration.get(durationToIndex(QRACEL_DURATION_10M));
         if (locals.idx != NULL_INDEX && locals.idx < state.get().roundCount)
