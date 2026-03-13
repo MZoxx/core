@@ -31,7 +31,7 @@ QPI::sint64 QPI::QpiContextProcedureCall::__qpiQueryOracle(
 	// check callback
 	if (!notificationProcPtr || ContractStateType::__contract_index != contractIndex)
 	{
-#if !defined(NDEBUG) && !defined(NO_UEFI)
+#if !defined(NO_UEFI)
 		CHAR16 dbgMsg[200];
 		setText(dbgMsg, L"__qpiQueryOracle FAIL cb: ptr=");
 		appendNumber(dbgMsg, (unsigned long long)(void*)notificationProcPtr, FALSE);
@@ -39,7 +39,7 @@ QPI::sint64 QPI::QpiContextProcedureCall::__qpiQueryOracle(
 		appendNumber(dbgMsg, ContractStateType::__contract_index, FALSE);
 		appendText(dbgMsg, L" ci=");
 		appendNumber(dbgMsg, contractIndex, FALSE);
-		addDebugMessage(dbgMsg);
+		logToConsole(dbgMsg);
 #endif
 		return -1;
 	}
@@ -48,7 +48,7 @@ QPI::sint64 QPI::QpiContextProcedureCall::__qpiQueryOracle(
 	const UserProcedureRegistry::UserProcedureData* procData;
 	if (!userProcedureRegistry || !(procData = userProcedureRegistry->get(notificationProcId)) || procData->procedure != (USER_PROCEDURE)notificationProcPtr)
 	{
-#if !defined(NDEBUG) && !defined(NO_UEFI)
+#if !defined(NO_UEFI)
 		CHAR16 dbgMsg[200];
 		setText(dbgMsg, L"__qpiQueryOracle FAIL reg: r=");
 		appendNumber(dbgMsg, (unsigned long long)(void*)userProcedureRegistry, FALSE);
@@ -60,7 +60,7 @@ QPI::sint64 QPI::QpiContextProcedureCall::__qpiQueryOracle(
 			appendText(dbgMsg, L" f=");
 			appendNumber(dbgMsg, pd ? 1 : 0, FALSE);
 		}
-		addDebugMessage(dbgMsg);
+		logToConsole(dbgMsg);
 #endif
 		return -1;
 	}
@@ -91,10 +91,17 @@ QPI::sint64 QPI::QpiContextProcedureCall::__qpiQueryOracle(
 			oracleEngine.refundFees(_currentContractId, fee);
 		}
 	}
-#if !defined(NDEBUG) && !defined(NO_UEFI)
+#if !defined(NO_UEFI)
 	else
 	{
-		addDebugMessage(L"Cannot start contract oracle query due to fee issue!");
+		CHAR16 feeMsg[200];
+		setText(feeMsg, L"__qpiQueryOracle FAIL fee: f=");
+		appendNumber(feeMsg, fee, FALSE);
+		appendText(feeMsg, L" si=");
+		appendNumber(feeMsg, contractSpectrumIdx, FALSE);
+		appendText(feeMsg, L" ci=");
+		appendNumber(feeMsg, contractIndex, FALSE);
+		logToConsole(feeMsg);
 	}
 #endif
 
