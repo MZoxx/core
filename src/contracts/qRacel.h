@@ -113,6 +113,8 @@ struct QRACEL : public ContractBase
         uint8 dbgLastStatus;
         uint8 _dbgPad0;
         uint16 _dbgPad1;
+        uint32 dbgActiveRaw;
+        uint32 dbgEndTickAutoCreates;
         Array<RoundData, QRACEL_MAX_ROUNDS> rounds;
         Array<BetData, QRACEL_MAX_BETS> bets;
         Array<uint32, QRACEL_DURATION_COUNT> activeRoundByDuration;
@@ -350,6 +352,8 @@ struct QRACEL : public ContractBase
         uint8 dbgLastStatus;
         uint8 _dbgPad0;
         uint16 _dbgPad1;
+        uint32 dbgActiveRaw;
+        uint32 dbgEndTickAutoCreates;
     };
     struct GetConfig_locals
     {
@@ -498,6 +502,7 @@ struct QRACEL : public ContractBase
         }
 
         locals.durationIndex = durationToIndex(input.durationType);
+        state.mut().dbgActiveRaw = state.get().activeRoundByDuration.get(locals.durationIndex);
         if (state.get().activeRoundByDuration.get(locals.durationIndex) != NULL_INDEX)
         {
             state.mut().dbgLastStatus = 3;
@@ -939,6 +944,8 @@ struct QRACEL : public ContractBase
         output.dbgLastStatus = state.get().dbgLastStatus;
         output._dbgPad0 = 0;
         output._dbgPad1 = 0;
+        output.dbgActiveRaw = state.get().dbgActiveRaw;
+        output.dbgEndTickAutoCreates = state.get().dbgEndTickAutoCreates;
 
         locals.idx = state.get().activeRoundByDuration.get(durationToIndex(QRACEL_DURATION_10M));
         if (locals.idx != NULL_INDEX && locals.idx < state.get().roundCount)
@@ -992,7 +999,7 @@ struct QRACEL : public ContractBase
             _V, _I, _T, _A, _D, _M, _W, _G, _X, _H, _H, _Q, _E, _G
         );
         state.mut().oracleId = OI::Price::getBinanceOracleId();
-        state.mut().autoCreate = 1;
+        state.mut().autoCreate = 0;
         state.mut()._pad0 = 0;
         state.mut()._pad1 = 0;
         state.mut()._pad2 = 0;
@@ -1083,6 +1090,7 @@ struct QRACEL : public ContractBase
                 state.mut().activeRoundByDuration.set(locals.durationIndex, locals.roundIndex);
                 state.mut().roundCount = state.get().roundCount + 1;
                 state.mut().nextRoundId = locals.round.roundId;
+                state.mut().dbgEndTickAutoCreates = state.get().dbgEndTickAutoCreates + 1;
                 continue;
             }
 
