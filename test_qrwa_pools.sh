@@ -187,7 +187,7 @@ count_asset_shares() {
 get_lowest_ask_price() {
   local orders ask
   orders=$(cli_call -enabletestcontracts -qxgetorder asset ask "$1" "$2" 0)
-  ask=$(echo "$orders" | awk 'NR>1 && /^[A-Z]/{print $2; exit}')
+  ask=$(echo "$orders" | awk 'NR>1 && /^[A-Z]/ && $2 ~ /^[0-9]+$/{print $2; exit}')
   echo "${ask:-0}"
 }
 
