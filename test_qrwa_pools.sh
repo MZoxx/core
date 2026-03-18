@@ -883,12 +883,34 @@ test_pool_c() {
     return
   fi
 
-  local id_pool_c
+  local id_pool_c id_holder
   id_pool_c=$(get_identity_from_seed "$SEED_POOL_C")
-  info "Pool C Sender: ${id_pool_c}"
+  id_holder=$(get_identity_from_seed "$SEED_QMINE_HOLDER")
+  info "Pool C Sender:  ${id_pool_c}"
+  info "QMINE-Holder:   ${id_holder}"
 
   # Diagnostic: check if mDedicatedRevenueAddress is actually set on the running node
   diagnose_contract_addresses
+
+  # Pool C braucht QMINE-Holder:
+  #   - Type 0 (QMINE-Payout) braucht mPayoutTotalQmineBegin > 0
+  #   - Type 3 (Dedicated qRWA) braucht qRWA-Holder mit >= 100K QMINE/Share
+  local holder_shares_before
+  holder_shares_before=$(count_asset_shares "$id_holder" "$QMINE_NAME")
+  holder_shares_before=${holder_shares_before:-0}
+
+  step "QMINE-Holder sicherstellen (nötig für type 0 + type 3)"
+  local qmine_shares
+  qmine_shares=$(ensure_qmine_holder)
+  info "QMINE-Shares: ${qmine_shares}"
+
+  if [[ "$holder_shares_before" -eq 0 ]]; then
+    step "Warte auf 2 Epoch-Wechsel (Holder-Snapshot → Payout-Buffer)"
+    wait_n_epoch_changes 2
+  else
+    step "Warte auf 1 Epoch-Wechsel (Holder bereits vorhanden)"
+    wait_n_epoch_changes 1
+  fi
 
   step "E_N-End Snapshot"
   local dist_qm_before dist_qrwa_before
