@@ -176,72 +176,70 @@ struct QRWA : public ContractBase
         uint8 _pad2;
     };
 
-    struct StateData
-    {
-        Asset mQmineAsset;
+protected:
+    Asset mQmineAsset;
 
-        // QMINE Shareholder Tracking
-        HashMap<id, uint64, QRWA_MAX_QMINE_HOLDERS> mBeginEpochBalances;
-        HashMap<id, uint64, QRWA_MAX_QMINE_HOLDERS> mEndEpochBalances;
-        uint64 mTotalQmineBeginEpoch; // Total QMINE shares at the start of the current epoch
+    // QMINE Shareholder Tracking
+    HashMap<id, uint64, QRWA_MAX_QMINE_HOLDERS> mBeginEpochBalances;
+    HashMap<id, uint64, QRWA_MAX_QMINE_HOLDERS> mEndEpochBalances;
+    uint64 mTotalQmineBeginEpoch; // Total QMINE shares at the start of the current epoch
 
-        // PAYOUT SNAPSHOTS (for distribution)
-        // These hold the data from the last epoch, saved at END_EPOCH
-        HashMap<id, uint64, QRWA_MAX_QMINE_HOLDERS> mPayoutBeginBalances;
-        HashMap<id, uint64, QRWA_MAX_QMINE_HOLDERS> mPayoutEndBalances;
-        uint64 mPayoutTotalQmineBegin; // Total QMINE shares from the last epoch's beginning
+    // PAYOUT SNAPSHOTS (for distribution)
+    // These hold the data from the last epoch, saved at END_EPOCH
+    HashMap<id, uint64, QRWA_MAX_QMINE_HOLDERS> mPayoutBeginBalances;
+    HashMap<id, uint64, QRWA_MAX_QMINE_HOLDERS> mPayoutEndBalances;
+    uint64 mPayoutTotalQmineBegin; // Total QMINE shares from the last epoch's beginning
 
-        // Votable Parameters
-        QRWAGovParams mCurrentGovParams; // The live, active parameters
+    // Votable Parameters
+    QRWAGovParams mCurrentGovParams; // The live, active parameters
 
-        // Voting state for governance parameters (voted by QMINE holders)
-        Array<QRWAGovProposal, QRWA_MAX_GOV_POLLS> mGovPolls;
-        HashMap<id, uint64, QRWA_MAX_QMINE_HOLDERS> mShareholderVoteMap; // Maps QMINE holder -> Gov Poll slot index
-        uint64 mCurrentGovProposalId;
-        uint64 mNewGovPollsThisEpoch;
+    // Voting state for governance parameters (voted by QMINE holders)
+    Array<QRWAGovProposal, QRWA_MAX_GOV_POLLS> mGovPolls;
+    HashMap<id, uint64, QRWA_MAX_QMINE_HOLDERS> mShareholderVoteMap; // Maps QMINE holder -> Gov Poll slot index
+    uint64 mCurrentGovProposalId;
+    uint64 mNewGovPollsThisEpoch;
 
-        // Asset Release Polls
-        Array<AssetReleaseProposal, QRWA_MAX_ASSET_POLLS> mAssetPolls;
-        HashMap<id, bit_64, QRWA_MAX_QMINE_HOLDERS> mAssetProposalVoterMap; // (Voter -> bitfield of poll slot indices)
-        HashMap<id, bit_64, QRWA_MAX_QMINE_HOLDERS> mAssetVoteOptions; // (Voter -> bitfield of options (0=No, 1=Yes))
-        uint64 mCurrentAssetProposalId; // Counter for creating new proposal ID
-        uint64 mNewAssetPollsThisEpoch;
+    // Asset Release Polls
+    Array<AssetReleaseProposal, QRWA_MAX_ASSET_POLLS> mAssetPolls;
+    HashMap<id, bit_64, QRWA_MAX_QMINE_HOLDERS> mAssetProposalVoterMap; // (Voter -> bitfield of poll slot indices)
+    HashMap<id, bit_64, QRWA_MAX_QMINE_HOLDERS> mAssetVoteOptions; // (Voter -> bitfield of options (0=No, 1=Yes))
+    uint64 mCurrentAssetProposalId; // Counter for creating new proposal ID
+    uint64 mNewAssetPollsThisEpoch;
 
-        // Treasury & Asset Release
-        uint64 mTreasuryBalance; // QMINE token balance holds by SC
-        HashMap<QRWAAsset, uint64, QRWA_MAX_ASSETS> mGeneralAssetBalances; // Balances for other assets (e.g., SC shares)
+    // Treasury & Asset Release
+    uint64 mTreasuryBalance; // QMINE token balance holds by SC
+    HashMap<QRWAAsset, uint64, QRWA_MAX_ASSETS> mGeneralAssetBalances; // Balances for other assets (e.g., SC shares)
 
-        // Payouts and Dividend Accounting
-        DateAndTime mLastPayoutTime; // Tracks the last payout time (Production)
-        uint64 mLastPayoutTick; // TESTING: Tick-based payout tracking
+    // Payouts and Dividend Accounting
+    DateAndTime mLastPayoutTime; // Tracks the last payout time (Production)
+    uint64 mLastPayoutTick; // TESTING: Tick-based payout tracking
 
-        // Dividend Pools
-        uint64 mRevenuePoolA; // Mined funds from Qubic farm (from SCs)
-        uint64 mRevenuePoolB; // Other dividend funds (from user wallets)
-        uint64 mDedicatedRevenuePool; // Pool C (BTC Mining) revenue from dedicated address
+    // Dividend Pools
+    uint64 mRevenuePoolA; // Mined funds from Qubic farm (from SCs)
+    uint64 mRevenuePoolB; // Other dividend funds (from user wallets)
+    uint64 mDedicatedRevenuePool; // Pool C (BTC Mining) revenue from dedicated address
 
-        // Processed dividend pools awaiting distribution
-        uint64 mQmineDividendPool; // QUs for QMINE holders
-        uint64 mQRWADividendPool; // QUs for qRWA shareholders
-        uint64 mDedicatedQRWADividendPool; // QUs for eligible Pool C qRWA shareholders (Pool C also feeds QMINE via mQmineDividendPool)
+    // Processed dividend pools awaiting distribution
+    uint64 mQmineDividendPool; // QUs for QMINE holders
+    uint64 mQRWADividendPool; // QUs for qRWA shareholders
+    uint64 mDedicatedQRWADividendPool; // QUs for eligible Pool C qRWA shareholders (Pool C also feeds QMINE via mQmineDividendPool)
 
-        // Pool C (BTC Mining) revenue configuration
-        id mDedicatedRevenueAddress;
+    // Pool C (BTC Mining) revenue configuration
+    id mDedicatedRevenueAddress;
 
-        // Pool A revenue address (QMINE issuer or configured mining address)
-        id mPoolARevenueAddress;
+    // Pool A revenue address (QMINE issuer or configured mining address)
+    id mPoolARevenueAddress;
 
-        // Fundraising address — excluded from ALL distributions
-        id mFundraisingAddress;
+    // Fundraising address — excluded from ALL distributions
+    id mFundraisingAddress;
 
-        // Total distributed tracking
-        uint64 mTotalQmineDistributed;
-        uint64 mTotalQRWADistributed;
+    // Total distributed tracking
+    uint64 mTotalQmineDistributed;
+    uint64 mTotalQRWADistributed;
 
-        // Ring buffer of the last QRWA_PAYOUT_RING_SIZE individual payouts (queryable via GetLatestPayouts)
-        Array<QRWAPayoutEntry, QRWA_PAYOUT_RING_SIZE> mLatestPayouts;
-        uint16 mLatestPayoutsNextIdx;
-    };
+    // Ring buffer of the last QRWA_PAYOUT_RING_SIZE individual payouts (queryable via GetLatestPayouts)
+    Array<QRWAPayoutEntry, QRWA_PAYOUT_RING_SIZE> mLatestPayouts;
+    uint16 mLatestPayoutsNextIdx;
 
 public:
     /***************************************************/
