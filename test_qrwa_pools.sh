@@ -895,21 +895,24 @@ test_pool_c() {
   # Pool C braucht QMINE-Holder:
   #   - Type 0 (QMINE-Payout) braucht mPayoutTotalQmineBegin > 0
   #   - Type 3 (Dedicated qRWA) braucht qRWA-Holder mit >= 100K QMINE/Share
-  local holder_shares_before
+  local holder_shares_before prev_qm_dist
   holder_shares_before=$(count_asset_shares "$id_holder" "$QMINE_NAME")
   holder_shares_before=${holder_shares_before:-0}
+  read -r prev_qm_dist _ <<< "$(get_total_distributed)"
 
   step "QMINE-Holder sicherstellen (nötig für type 0 + type 3)"
   local qmine_shares
   qmine_shares=$(ensure_qmine_holder)
   info "QMINE-Shares: ${qmine_shares}"
 
-  if [[ "$holder_shares_before" -eq 0 ]]; then
-    step "Warte auf 2 Epoch-Wechsel (Holder-Snapshot → Payout-Buffer)"
-    wait_n_epoch_changes 2
-  else
-    step "Warte auf 1 Epoch-Wechsel (Holder bereits vorhanden)"
+  if [[ "$holder_shares_before" -gt 0 && "$prev_qm_dist" -gt 0 ]]; then
+    info "Holder bereits gesnapshotted (totalQmineDistributed=${prev_qm_dist}) — kein Epoch-Wechsel nötig"
+  elif [[ "$holder_shares_before" -gt 0 ]]; then
+    step "Warte auf 1 Epoch-Wechsel (Holder vorhanden, aber noch kein Payout-Snapshot)"
     wait_n_epoch_changes 1
+  else
+    step "Warte auf 2 Epoch-Wechsel (neuer Holder → Snapshot → Payout-Buffer)"
+    wait_n_epoch_changes 2
   fi
 
   step "E_N-End Snapshot"
