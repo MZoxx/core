@@ -353,7 +353,7 @@ get_ring_raw() {
     local waited=0
     while kill -0 "$pid" 2>/dev/null; do
       sleep 1; waited=$((waited + 1))
-      if [[ "$waited" -ge 20 ]]; then
+      if [[ "$waited" -ge 60 ]]; then
         kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
         echo -e "    ${YELLOW}Ring-Buffer Timeout (Versuch ${attempt}/3)...${NC}" >&2
         break
