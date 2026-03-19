@@ -65,7 +65,7 @@ constexpr uint64 QRWA_LOG_TYPE_PAYOUT_QRWA_HOLDER = 13; // valueA=amount, valueB
 constexpr uint64 QRWA_LOG_TYPE_PAYOUT_DEDICATED_QRWA = 14; // valueA=amount, valueB=qRWA shares (Pool C leg)
 
 // Ring buffer for tracking the last N individual payouts (queryable via GetLatestPayouts = fn 11)
-constexpr uint64 QRWA_PAYOUT_RING_SIZE = 1024; // Must be a power of 2
+constexpr uint64 QRWA_PAYOUT_RING_SIZE = 8192; // Must be a power of 2
 constexpr uint8 QRWA_PAYOUT_TYPE_QMINE_HOLDER    = 0; // Regular QMINE holder payout
 constexpr uint8 QRWA_PAYOUT_TYPE_QMINE_DEV       = 1; // Dev address gets reducer's portion
 constexpr uint8 QRWA_PAYOUT_TYPE_QRWA_HOLDER     = 2; // qRWA shareholder (Pool B)
@@ -167,13 +167,14 @@ struct QRWA : public ContractBase
     // Single entry in the per-pool payout ring buffers (mPayoutsQmine, mPayoutsQrwa, mPayoutsDedicated).
     struct QRWAPayoutEntry
     {
-        id recipient;       // Who received the payment
-        uint64 amount;      // Amount in QU
-        uint32 tick;        // Network tick of the payout
-        uint8 payoutType;   // QRWA_PAYOUT_TYPE_* constant
+        id recipient;          // Who received the payment
+        uint64 amount;         // Amount in QU
+        uint64 qmineHolding;   // Recipient's QMINE shares at payout time
+        uint64 qrwaHolding;    // Recipient's qRWA shares at payout time
+        uint32 tick;           // Network tick of the payout
+        uint16 epoch;          // Epoch of the payout
+        uint8 payoutType;      // QRWA_PAYOUT_TYPE_* constant
         uint8 _pad0;
-        uint8 _pad1;
-        uint8 _pad2;
     };
 
 protected:
@@ -2129,7 +2130,10 @@ public:
                                         locals.totalEligiblePaid_128 += locals.eligiblePayout_128;
                                         locals.payoutEntry.recipient = locals.holder;
                                         locals.payoutEntry.amount = locals.payout_u64;
+                                        locals.payoutEntry.qmineHolding = locals.eligibleBalance;
+                                        locals.payoutEntry.qrwaHolding = 0;
                                         locals.payoutEntry.tick = qpi.tick();
+                                        locals.payoutEntry.epoch = qpi.epoch();
                                         locals.payoutEntry.payoutType = QRWA_PAYOUT_TYPE_QMINE_HOLDER;
                                         state.mPayoutsQmine.set(state.mPayoutsQmineNextIdx, locals.payoutEntry);
                                         state.mPayoutsQmineNextIdx = (state.mPayoutsQmineNextIdx + 1) & (QRWA_PAYOUT_RING_SIZE - 1);
@@ -2164,7 +2168,10 @@ public:
                                         locals.qmineDividendPool_128 = 0; // Pool exhausted
                                         locals.payoutEntry.recipient = locals.holder;
                                         locals.payoutEntry.amount = locals.payout_u64;
+                                        locals.payoutEntry.qmineHolding = locals.eligibleBalance;
+                                        locals.payoutEntry.qrwaHolding = 0;
                                         locals.payoutEntry.tick = qpi.tick();
+                                        locals.payoutEntry.epoch = qpi.epoch();
                                         locals.payoutEntry.payoutType = QRWA_PAYOUT_TYPE_QMINE_HOLDER;
                                         state.mPayoutsQmine.set(state.mPayoutsQmineNextIdx, locals.payoutEntry);
                                         state.mPayoutsQmineNextIdx = (state.mPayoutsQmineNextIdx + 1) & (QRWA_PAYOUT_RING_SIZE - 1);
@@ -2202,7 +2209,10 @@ public:
                                 locals.qmineDividendPool_128 = 0;
                                 locals.payoutEntry.recipient = state.mCurrentGovParams.qmineDevAddress;
                                 locals.payoutEntry.amount = locals.payout_u64;
+                                locals.payoutEntry.qmineHolding = 0;
+                                locals.payoutEntry.qrwaHolding = 0;
                                 locals.payoutEntry.tick = qpi.tick();
+                                locals.payoutEntry.epoch = qpi.epoch();
                                 locals.payoutEntry.payoutType = QRWA_PAYOUT_TYPE_QMINE_DEV;
                                 state.mPayoutsQmine.set(state.mPayoutsQmineNextIdx, locals.payoutEntry);
                                 state.mPayoutsQmineNextIdx = (state.mPayoutsQmineNextIdx + 1) & (QRWA_PAYOUT_RING_SIZE - 1);
@@ -2288,7 +2298,10 @@ public:
                                         locals.distributedAmount = sadd(locals.distributedAmount, locals.payout_u64);
                                         locals.payoutEntry.recipient = locals.holder;
                                         locals.payoutEntry.amount = locals.payout_u64;
+                                        locals.payoutEntry.qmineHolding = 0;
+                                        locals.payoutEntry.qrwaHolding = locals.qrwaShares;
                                         locals.payoutEntry.tick = qpi.tick();
+                                        locals.payoutEntry.epoch = qpi.epoch();
                                         locals.payoutEntry.payoutType = QRWA_PAYOUT_TYPE_QRWA_HOLDER;
                                         state.mPayoutsQrwa.set(state.mPayoutsQrwaNextIdx, locals.payoutEntry);
                                         state.mPayoutsQrwaNextIdx = (state.mPayoutsQrwaNextIdx + 1) & (QRWA_PAYOUT_RING_SIZE - 1);
@@ -2417,7 +2430,10 @@ public:
                                         locals.dedicatedDistributed = sadd(locals.dedicatedDistributed, locals.payout_u64);
                                         locals.payoutEntry.recipient = locals.holder;
                                         locals.payoutEntry.amount = locals.payout_u64;
+                                        locals.payoutEntry.qmineHolding = static_cast<uint64>(locals.qmineBalance);
+                                        locals.payoutEntry.qrwaHolding = locals.qrwaShares;
                                         locals.payoutEntry.tick = qpi.tick();
+                                        locals.payoutEntry.epoch = qpi.epoch();
                                         locals.payoutEntry.payoutType = QRWA_PAYOUT_TYPE_DEDICATED_QRWA;
                                         state.mPayoutsDedicated.set(state.mPayoutsDedicatedNextIdx, locals.payoutEntry);
                                         state.mPayoutsDedicatedNextIdx = (state.mPayoutsDedicatedNextIdx + 1) & (QRWA_PAYOUT_RING_SIZE - 1);
