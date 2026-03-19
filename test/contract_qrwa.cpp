@@ -408,12 +408,13 @@ TEST(ContractQRWA, Initialization)
     auto divBalances = qrwa.getDividendBalances();
     EXPECT_EQ(divBalances.revenuePoolA, 0);
     EXPECT_EQ(divBalances.revenuePoolB, 0);
-    EXPECT_EQ(divBalances.qmineDividendPool, 0);
-    EXPECT_EQ(divBalances.qrwaDividendPool, 0);
+    EXPECT_EQ(divBalances.poolAQmineDividend, 0);
+    EXPECT_EQ(divBalances.poolAQrwaDividend, 0);
 
     auto distTotals = qrwa.getTotalDistributed();
-    EXPECT_EQ(distTotals.totalQmineDistributed, 0);
-    EXPECT_EQ(distTotals.totalQRWADistributed, 0);
+    EXPECT_EQ(distTotals.totalPoolADistributed, 0);
+    EXPECT_EQ(distTotals.totalPoolBDistributed, 0);
+    EXPECT_EQ(distTotals.totalPoolCDistributed, 0);
 }
 
 
@@ -882,13 +883,14 @@ TEST(ContractQRWA, Payout_FullDistribution)
     // Distribution Pool
     // Y_revenue = 1,000,000 - 500,000 = 500,000
     // totalDistribution = 500,000 (Y) + 0 (B) = 500,000
-    // mQmineDividendPool = 500k * 90% = 450,000
-    // mQRWADividendPool = 500k * 10% = 50,000
+    // mPoolAQmineDividend = 500k * 90% = 450,000
+    // mPoolAQrwaDividend = 500k * 10% = 50,000
 
     // qRWA Payout (50,000 QUs)
     uint64 qrwaPerShare = 50000 / NUMBER_OF_COMPUTORS; // 73
     auto distTotals = qrwa.getTotalDistributed();
-    EXPECT_EQ(distTotals.totalQRWADistributed, qrwaPerShare * NUMBER_OF_COMPUTORS); // 73 * 676 = 49328
+    // totalPoolADistributed = QMINE payouts (450,000) + qRWA payouts (73 * 676)
+    EXPECT_EQ(distTotals.totalPoolADistributed, 450000 + qrwaPerShare * NUMBER_OF_COMPUTORS);
 
     // QMINE Payout (450,000 QUs)
     // mPayoutTotalQmineBegin = 1,000,000
@@ -920,8 +922,8 @@ TEST(ContractQRWA, Payout_FullDistribution)
     auto divBalances = qrwa.getDividendBalances();
     EXPECT_EQ(divBalances.revenuePoolA, 0);
     EXPECT_EQ(divBalances.revenuePoolB, 0);
-    EXPECT_EQ(divBalances.qmineDividendPool, 0);
-    EXPECT_EQ(divBalances.qrwaDividendPool, 50000 - (qrwaPerShare * NUMBER_OF_COMPUTORS)); // Dust
+    EXPECT_EQ(divBalances.poolAQmineDividend, 0);
+    EXPECT_EQ(divBalances.poolAQrwaDividend, 50000 - (qrwaPerShare * NUMBER_OF_COMPUTORS)); // Dust
 }
 
 TEST(ContractQRWA, Payout_SnapshotLogic)
@@ -975,8 +977,8 @@ TEST(ContractQRWA, Payout_SnapshotLogic)
 
     // Payout Calculation (Epoch 1):
     // Pool A: 1,000,000 -> Fees (50%) = 500,000 -> Y_revenue = 500,000
-    // mQmineDividendPool (90%): 450,000
-    // mQRWADividendPool (10%): 50,000
+    // mPoolAQmineDividend (90%): 450,000
+    // mPoolAQrwaDividend (10%): 50,000
 
     // Payouts:
     // A: (500 * 450,000) / 3,500 = 64,285
@@ -1032,7 +1034,7 @@ TEST(ContractQRWA, Payout_SnapshotLogic)
 
     // Payout Calculation (Epoch 2):
     // Pool A: 1,000,000 -> Fees (50%) = 500,000 -> Y_revenue = 500,000
-    // mQmineDividendPool (90%): 450,000
+    // mPoolAQmineDividend (90%): 450,000
     // Payouts:
     // A: (500 * 450,000) / 3,500 = 64,285
     // B: 0
@@ -1139,13 +1141,14 @@ TEST(ContractQRWA, Payout_FullDistribution2)
     // Distribution Pool
     // Y_revenue = 3,000,000 - 1,500,000 = 1,500,000
     // totalDistribution = 1,500,000 (Y) + 0 (B) = 1,500,000
-    // mQmineDividendPool = 1.5M * 90% = 1,350,000
-    // mQRWADividendPool = 1.5M * 10% = 150,000
+    // mPoolAQmineDividend = 1.5M * 90% = 1,350,000
+    // mPoolAQrwaDividend = 1.5M * 10% = 150,000
 
     // qRWA Payout (150,000 QUs)
     uint64 qrwaPerShare = 150000 / NUMBER_OF_COMPUTORS; // 150000 / 676 = 221
     auto distTotals = qrwa.getTotalDistributed();
-    EXPECT_EQ(distTotals.totalQRWADistributed, qrwaPerShare * NUMBER_OF_COMPUTORS); // 221 * 676 = 149416
+    // totalPoolADistributed = QMINE payouts (1,350,000) + qRWA payouts (221 * 676)
+    EXPECT_EQ(distTotals.totalPoolADistributed, 1350000 + qrwaPerShare * NUMBER_OF_COMPUTORS);
 
     // QMINE Payout (1,350,000 QUs)
     // mPayoutTotalQmineBegin = 1,000,000 (A:200k, B:300k, C:100k, Issuer:400k)
@@ -1178,8 +1181,8 @@ TEST(ContractQRWA, Payout_FullDistribution2)
     auto divBalances = qrwa.getDividendBalances();
     EXPECT_EQ(divBalances.revenuePoolA, 0);
     EXPECT_EQ(divBalances.revenuePoolB, 0);
-    EXPECT_EQ(divBalances.qmineDividendPool, 0); // QMINE dev gets the remainder
-    EXPECT_EQ(divBalances.qrwaDividendPool, 150000 - (qrwaPerShare * NUMBER_OF_COMPUTORS)); // Dust (584)
+    EXPECT_EQ(divBalances.poolAQmineDividend, 0); // QMINE dev gets the remainder
+    EXPECT_EQ(divBalances.poolAQrwaDividend, 150000 - (qrwaPerShare * NUMBER_OF_COMPUTORS)); // Dust (584)
 }
 
 TEST(ContractQRWA, FullScenario_DividendsAndGovernance)
