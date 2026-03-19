@@ -1087,6 +1087,21 @@ public:
         output.totalQRWADistributed = state.get().mTotalQRWADistributed;
     }
 
+    // Diagnostic: Query configured contract addresses
+    struct GetContractAddresses_input {};
+    struct GetContractAddresses_output
+    {
+        id dedicatedRevenueAddress;
+        id poolARevenueAddress;
+        id fundraisingAddress;
+    };
+    PUBLIC_FUNCTION(GetContractAddresses)
+    {
+        output.dedicatedRevenueAddress = state.get().mDedicatedRevenueAddress;
+        output.poolARevenueAddress = state.get().mPoolARevenueAddress;
+        output.fundraisingAddress = state.get().mFundraisingAddress;
+    }
+
     struct GetActiveAssetReleasePollIds_input {};
 
     struct GetActiveAssetReleasePollIds_output
@@ -2538,5 +2553,6 @@ public:
         REGISTER_USER_FUNCTION(GetGeneralAssetBalance, 9);
         REGISTER_USER_FUNCTION(GetGeneralAssets, 10);
         REGISTER_USER_FUNCTION(GetLatestPayouts, 11);
+        REGISTER_USER_FUNCTION(GetContractAddresses, 12);
     }
 };
