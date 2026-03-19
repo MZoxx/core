@@ -63,6 +63,7 @@ constexpr uint64 QRWA_LOG_TYPE_INCOMING_REVENUE_DEDICATED = 11;
 constexpr uint64 QRWA_LOG_TYPE_PAYOUT_QMINE_HOLDER = 12; // valueA=amount, valueB=eligible QMINE count
 constexpr uint64 QRWA_LOG_TYPE_PAYOUT_QRWA_HOLDER = 13; // valueA=amount, valueB=qRWA shares
 constexpr uint64 QRWA_LOG_TYPE_PAYOUT_DEDICATED_QRWA = 14; // valueA=amount, valueB=qRWA shares (Pool C leg)
+constexpr uint64 QRWA_LOG_TYPE_INCOMING_SC_DIVIDEND = 15; // SC dividend received → Pool B; valueA=amount, valueB=cumulative
 
 // Ring buffer for tracking the last N individual payouts (queryable via GetLatestPayouts = fn 11)
 constexpr uint64 QRWA_PAYOUT_RING_SIZE = 8192; // Must be a power of 2
@@ -210,6 +211,7 @@ protected:
     // Treasury & Asset Release
     uint64 mTreasuryBalance; // QMINE token balance holds by SC
     HashMap<QRWAAsset, uint64, QRWA_MAX_ASSETS> mGeneralAssetBalances; // Balances for other assets (e.g., SC shares)
+    HashMap<id, uint64, QRWA_MAX_ASSETS> mScDividendTracker; // SC contract ID → cumulative dividends received (routed to Pool B)
 
     // Payouts and Dividend Accounting
     DateAndTime mLastPayoutTime; // Tracks the last payout time (Production)
@@ -1239,6 +1241,43 @@ public:
         }
     }
 
+    // GetScDividendTracking (fn 15): Lists all SC contract IDs from which dividends were received
+    // and their cumulative totals. All SC dividends are routed to Pool B.
+    struct GetScDividendTracking_input {};
+    struct GetScDividendTracking_output
+    {
+        uint64 count;
+        Array<id, QRWA_MAX_ASSETS> scContractIds;
+        Array<uint64, QRWA_MAX_ASSETS> cumulativeDividends;
+    };
+    struct GetScDividendTracking_locals
+    {
+        sint64 iterIndex;
+    };
+    PUBLIC_FUNCTION_WITH_LOCALS(GetScDividendTracking)
+    {
+        output.count = 0;
+        locals.iterIndex = NULL_INDEX;
+
+        while (true)
+        {
+            locals.iterIndex = state.mScDividendTracker.nextElementIndex(locals.iterIndex);
+            if (locals.iterIndex == NULL_INDEX)
+            {
+                break;
+            }
+
+            output.scContractIds.set(output.count, state.mScDividendTracker.key(locals.iterIndex));
+            output.cumulativeDividends.set(output.count, state.mScDividendTracker.value(locals.iterIndex));
+            output.count++;
+
+            if (output.count >= QRWA_MAX_ASSETS)
+            {
+                break;
+            }
+        }
+    }
+
     // Per-pool payout ring buffer queries (paginated).
     // Ring buffer stores QRWA_PAYOUT_RING_SIZE entries, query returns max QRWA_PAYOUT_PAGE_SIZE per call.
     // Entries are returned newest-first. page=0 → most recent, page=1 → next 1000, etc.
@@ -1465,6 +1504,7 @@ public:
         state.mPayoutBeginBalances.reset();
         state.mPayoutEndBalances.reset();
         state.mGeneralAssetBalances.reset();
+        state.mScDividendTracker.reset();
         state.mShareholderVoteMap.reset();
         state.mAssetProposalVoterMap.reset();
         state.mAssetVoteOptions.reset();
@@ -2537,9 +2577,26 @@ public:
     struct POST_INCOMING_TRANSFER_locals
     {
         QRWALogger logger;
+        uint64 prevCumulative;
     };
     POST_INCOMING_TRANSFER_WITH_LOCALS()
     {
+        // SC dividend routing: if a held SC distributes dividends (type 3), always → Pool B
+        if (input.type == TransferType::qpiDistributeDividends)
+        {
+            state.mRevenuePoolB = sadd(state.mRevenuePoolB, static_cast<uint64>(input.amount));
+            // Update cumulative SC dividend tracker
+            state.mScDividendTracker.get(input.sourceId, locals.prevCumulative);
+            state.mScDividendTracker.set(input.sourceId, sadd(locals.prevCumulative, static_cast<uint64>(input.amount)));
+            locals.logger.contractId = CONTRACT_INDEX;
+            locals.logger.logType = QRWA_LOG_TYPE_INCOMING_SC_DIVIDEND;
+            locals.logger.primaryId = input.sourceId;
+            locals.logger.valueA = input.amount;
+            locals.logger.valueB = sadd(locals.prevCumulative, static_cast<uint64>(input.amount));
+            LOG_INFO(locals.logger);
+            return;
+        }
+
         // Revenue routing:
         // Pool A: QUTIL contract OR mPoolARevenueAddress (QMINE issuer / mining revenue)
         // Pool C: Dedicated BTC revenue address (mDedicatedRevenueAddress)
@@ -2621,6 +2678,14 @@ public:
             state.mGeneralAssetBalances.get(locals.wrapper, locals.currentAssetBalance); // 0 if not present
             locals.currentAssetBalance = sadd(locals.currentAssetBalance, (uint64)input.numberOfShares);
             state.mGeneralAssetBalances.set(locals.wrapper, locals.currentAssetBalance);
+
+            // Register the asset issuer (SC contract ID) in the dividend tracker
+            // so POST_INCOMING_TRANSFER can recognize its dividends.
+            if (!state.mScDividendTracker.get(input.asset.issuer, locals.currentAssetBalance))
+            {
+                state.mScDividendTracker.set(input.asset.issuer, 0);
+            }
+
             locals.logger.valueB = QRWA_STATUS_SUCCESS;
         }
         else
@@ -2657,5 +2722,6 @@ public:
         REGISTER_USER_FUNCTION(GetContractAddresses, 12);
         REGISTER_USER_FUNCTION(GetPayoutsQrwa, 13);
         REGISTER_USER_FUNCTION(GetPayoutsDedicated, 14);
+        REGISTER_USER_FUNCTION(GetScDividendTracking, 15);
     }
 };
