@@ -164,7 +164,7 @@ struct QRWA : public ContractBase
         sint8 _terminator;
     };
 
-    // Single entry in the payout ring buffer (state.mLatestPayouts).
+    // Single entry in the per-pool payout ring buffers (mPayoutsQmine, mPayoutsQrwa, mPayoutsDedicated).
     struct QRWAPayoutEntry
     {
         id recipient;       // Who received the payment
@@ -237,9 +237,13 @@ protected:
     uint64 mTotalQmineDistributed;
     uint64 mTotalQRWADistributed;
 
-    // Ring buffer of the last QRWA_PAYOUT_RING_SIZE individual payouts (queryable via GetLatestPayouts)
-    Array<QRWAPayoutEntry, QRWA_PAYOUT_RING_SIZE> mLatestPayouts;
-    uint16 mLatestPayoutsNextIdx;
+    // Per-pool ring buffers (queryable via GetPayoutsQmine/GetPayoutsQrwa/GetPayoutsDedicated)
+    Array<QRWAPayoutEntry, QRWA_PAYOUT_RING_SIZE> mPayoutsQmine;          // Types 0+1: QMINE holder + dev
+    uint16 mPayoutsQmineNextIdx;
+    Array<QRWAPayoutEntry, QRWA_PAYOUT_RING_SIZE> mPayoutsQrwa;           // Type 2: qRWA holder (Pool A+B 10%)
+    uint16 mPayoutsQrwaNextIdx;
+    Array<QRWAPayoutEntry, QRWA_PAYOUT_RING_SIZE> mPayoutsDedicated;      // Type 3: Dedicated qRWA (Pool C 10%)
+    uint16 mPayoutsDedicatedNextIdx;
 
 public:
     /***************************************************/
@@ -1220,19 +1224,47 @@ public:
         }
     }
 
-    // GetLatestPayouts (fn 11): Returns the ring buffer of the last QRWA_PAYOUT_RING_SIZE individual payouts.
+    // Per-pool payout ring buffer queries.
     // nextIdx points to the NEXT write position (= oldest entry if buffer is full).
     // Parse order: entries from nextIdx..nextIdx-1 (mod QRWA_PAYOUT_RING_SIZE), oldest first → newest last.
-    struct GetLatestPayouts_input {};
-    struct GetLatestPayouts_output
+
+    // GetPayoutsQmine (fn 11): QMINE holder + dev payouts (types 0+1, funded by 90% of all pools)
+    struct GetPayoutsQmine_input {};
+    struct GetPayoutsQmine_output
     {
         Array<QRWAPayoutEntry, QRWA_PAYOUT_RING_SIZE> payouts;
-        uint16 nextIdx; // Next write index (oldest entry position when buffer is full)
+        uint16 nextIdx;
     };
-    PUBLIC_FUNCTION(GetLatestPayouts)
+    PUBLIC_FUNCTION(GetPayoutsQmine)
     {
-        output.payouts = state.mLatestPayouts;
-        output.nextIdx = state.mLatestPayoutsNextIdx;
+        output.payouts = state.mPayoutsQmine;
+        output.nextIdx = state.mPayoutsQmineNextIdx;
+    }
+
+    // GetPayoutsQrwa (fn 13): qRWA holder payouts (type 2, funded by 10% of Pool A+B)
+    struct GetPayoutsQrwa_input {};
+    struct GetPayoutsQrwa_output
+    {
+        Array<QRWAPayoutEntry, QRWA_PAYOUT_RING_SIZE> payouts;
+        uint16 nextIdx;
+    };
+    PUBLIC_FUNCTION(GetPayoutsQrwa)
+    {
+        output.payouts = state.mPayoutsQrwa;
+        output.nextIdx = state.mPayoutsQrwaNextIdx;
+    }
+
+    // GetPayoutsDedicated (fn 14): Dedicated qRWA payouts (type 3, funded by 10% of Pool C)
+    struct GetPayoutsDedicated_input {};
+    struct GetPayoutsDedicated_output
+    {
+        Array<QRWAPayoutEntry, QRWA_PAYOUT_RING_SIZE> payouts;
+        uint16 nextIdx;
+    };
+    PUBLIC_FUNCTION(GetPayoutsDedicated)
+    {
+        output.payouts = state.mPayoutsDedicated;
+        output.nextIdx = state.mPayoutsDedicatedNextIdx;
     }
 
     /***************************************************/
@@ -2099,8 +2131,8 @@ public:
                                         locals.payoutEntry.amount = locals.payout_u64;
                                         locals.payoutEntry.tick = qpi.tick();
                                         locals.payoutEntry.payoutType = QRWA_PAYOUT_TYPE_QMINE_HOLDER;
-                                        state.mLatestPayouts.set(state.mLatestPayoutsNextIdx, locals.payoutEntry);
-                                        state.mLatestPayoutsNextIdx = (state.mLatestPayoutsNextIdx + 1) & (QRWA_PAYOUT_RING_SIZE - 1);
+                                        state.mPayoutsQmine.set(state.mPayoutsQmineNextIdx, locals.payoutEntry);
+                                        state.mPayoutsQmineNextIdx = (state.mPayoutsQmineNextIdx + 1) & (QRWA_PAYOUT_RING_SIZE - 1);
                                         locals.logger.contractId = CONTRACT_INDEX;
                                         locals.logger.logType = QRWA_LOG_TYPE_PAYOUT_QMINE_HOLDER;
                                         locals.logger.primaryId = locals.holder;
@@ -2134,8 +2166,8 @@ public:
                                         locals.payoutEntry.amount = locals.payout_u64;
                                         locals.payoutEntry.tick = qpi.tick();
                                         locals.payoutEntry.payoutType = QRWA_PAYOUT_TYPE_QMINE_HOLDER;
-                                        state.mLatestPayouts.set(state.mLatestPayoutsNextIdx, locals.payoutEntry);
-                                        state.mLatestPayoutsNextIdx = (state.mLatestPayoutsNextIdx + 1) & (QRWA_PAYOUT_RING_SIZE - 1);
+                                        state.mPayoutsQmine.set(state.mPayoutsQmineNextIdx, locals.payoutEntry);
+                                        state.mPayoutsQmineNextIdx = (state.mPayoutsQmineNextIdx + 1) & (QRWA_PAYOUT_RING_SIZE - 1);
                                         locals.logger.contractId = CONTRACT_INDEX;
                                         locals.logger.logType = QRWA_LOG_TYPE_PAYOUT_QMINE_HOLDER;
                                         locals.logger.primaryId = locals.holder;
@@ -2172,8 +2204,8 @@ public:
                                 locals.payoutEntry.amount = locals.payout_u64;
                                 locals.payoutEntry.tick = qpi.tick();
                                 locals.payoutEntry.payoutType = QRWA_PAYOUT_TYPE_QMINE_DEV;
-                                state.mLatestPayouts.set(state.mLatestPayoutsNextIdx, locals.payoutEntry);
-                                state.mLatestPayoutsNextIdx = (state.mLatestPayoutsNextIdx + 1) & (QRWA_PAYOUT_RING_SIZE - 1);
+                                state.mPayoutsQmine.set(state.mPayoutsQmineNextIdx, locals.payoutEntry);
+                                state.mPayoutsQmineNextIdx = (state.mPayoutsQmineNextIdx + 1) & (QRWA_PAYOUT_RING_SIZE - 1);
                             }
                             else
                             {
@@ -2258,8 +2290,8 @@ public:
                                         locals.payoutEntry.amount = locals.payout_u64;
                                         locals.payoutEntry.tick = qpi.tick();
                                         locals.payoutEntry.payoutType = QRWA_PAYOUT_TYPE_QRWA_HOLDER;
-                                        state.mLatestPayouts.set(state.mLatestPayoutsNextIdx, locals.payoutEntry);
-                                        state.mLatestPayoutsNextIdx = (state.mLatestPayoutsNextIdx + 1) & (QRWA_PAYOUT_RING_SIZE - 1);
+                                        state.mPayoutsQrwa.set(state.mPayoutsQrwaNextIdx, locals.payoutEntry);
+                                        state.mPayoutsQrwaNextIdx = (state.mPayoutsQrwaNextIdx + 1) & (QRWA_PAYOUT_RING_SIZE - 1);
                                         locals.logger.contractId = CONTRACT_INDEX;
                                         locals.logger.logType = QRWA_LOG_TYPE_PAYOUT_QRWA_HOLDER;
                                         locals.logger.primaryId = locals.holder;
@@ -2387,8 +2419,8 @@ public:
                                         locals.payoutEntry.amount = locals.payout_u64;
                                         locals.payoutEntry.tick = qpi.tick();
                                         locals.payoutEntry.payoutType = QRWA_PAYOUT_TYPE_DEDICATED_QRWA;
-                                        state.mLatestPayouts.set(state.mLatestPayoutsNextIdx, locals.payoutEntry);
-                                        state.mLatestPayoutsNextIdx = (state.mLatestPayoutsNextIdx + 1) & (QRWA_PAYOUT_RING_SIZE - 1);
+                                        state.mPayoutsDedicated.set(state.mPayoutsDedicatedNextIdx, locals.payoutEntry);
+                                        state.mPayoutsDedicatedNextIdx = (state.mPayoutsDedicatedNextIdx + 1) & (QRWA_PAYOUT_RING_SIZE - 1);
                                         locals.logger.contractId = CONTRACT_INDEX;
                                         locals.logger.logType = QRWA_LOG_TYPE_PAYOUT_DEDICATED_QRWA;
                                         locals.logger.primaryId = locals.holder;
@@ -2550,7 +2582,9 @@ public:
         REGISTER_USER_FUNCTION(GetActiveGovPollIds, 8);
         REGISTER_USER_FUNCTION(GetGeneralAssetBalance, 9);
         REGISTER_USER_FUNCTION(GetGeneralAssets, 10);
-        REGISTER_USER_FUNCTION(GetLatestPayouts, 11);
+        REGISTER_USER_FUNCTION(GetPayoutsQmine, 11);
         REGISTER_USER_FUNCTION(GetContractAddresses, 12);
+        REGISTER_USER_FUNCTION(GetPayoutsQrwa, 13);
+        REGISTER_USER_FUNCTION(GetPayoutsDedicated, 14);
     }
 };

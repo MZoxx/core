@@ -2,7 +2,10 @@
 #
 # test_qrwa_pools.sh — qRWA Pool Payout Tests (Pool A / B / C + Reducer)
 # =======================================================================
-# Prüft alle Payout-Pfade des qRWA-Contracts mittels Ring-Buffer (fn 11):
+# Prüft alle Payout-Pfade des qRWA-Contracts mittels Per-Pool Ring-Buffer:
+#   fn 11 = GetPayoutsQmine   (types 0+1: QMINE-Holder + Dev)
+#   fn 13 = GetPayoutsQrwa    (type 2: qRWA-Holder, Pool A+B 10%)
+#   fn 14 = GetPayoutsDedicated (type 3: Dedicated qRWA, Pool C 10%)
 #
 #   Pool A  → mPoolARevenueAddress sendet QU → type 0 (QMINE-Holder) + type 2 (qRWA-Holder)
 #   Pool B  → beliebige Adresse sendet QU   → type 0 (QMINE-Holder) + type 2 (qRWA-Holder)
@@ -343,11 +346,12 @@ diagnose_contract_addresses() {
 }
 
 get_ring_raw() {
+  local fn_num="${1:-11}"
   local attempt raw pid tmpf
-  tmpf="/tmp/qrwa_ring_raw_$$.txt"
+  tmpf="/tmp/qrwa_ring_raw_${fn_num}_$$.txt"
   for attempt in 1 2 3; do
     rm -f "$tmpf"
-    cli_call -enabletestcontracts -callcontractfunction "$CONTRACT_INDEX" 11 "" \
+    cli_call -enabletestcontracts -callcontractfunction "$CONTRACT_INDEX" "$fn_num" "" \
       '{ [1024; {id, uint64, uint32, uint8, uint8, uint8, uint8}], uint16 }' > "$tmpf" 2>&1 &
     pid=$!
     local waited=0
@@ -558,7 +562,7 @@ print_ring_payouts() {
     build_holdings_cache_from_tsv "$tsv_file"
   fi
   echo ""
-  echo "--- Letzte Payouts aus Ring-Buffer (fn 11) ---"
+  echo "--- Letzte Payouts aus Ring-Buffer ---"
   echo "ADDR                                                          AMOUNT_QU       TICK       TYPE  EVT_LOGTYPE  REASON          TICK_TYPE_TOTAL"
   while IFS=$'\t' read -r addr amount tick type; do
     [[ -z "$addr" || "$amount" -le 0 ]] && continue
@@ -755,21 +759,29 @@ test_pool_b() {
     fail "Pool B → QMINE-Holder Balance" "Kein Payout erhalten (delta=${delta_holder})"
   fi
 
-  step "Ring-Buffer abfragen (fn 11)"
+  step "QMINE Ring-Buffer abfragen (fn 11)"
   local ring_raw
-  ring_raw=$(get_ring_raw)
+  ring_raw=$(get_ring_raw 11)
   if [[ -n "$ring_raw" ]]; then
     print_ring_payouts "$ring_raw"
     assert_ring_type "Pool B → type 0 (QMINE-Holder payout)" "$id_holder" "0" "$ring_raw"
+  else
+    info "QMINE Ring-Buffer nicht verfügbar — Assertions übersprungen"
+  fi
+
+  step "qRWA Ring-Buffer abfragen (fn 13)"
+  local ring_raw_qrwa
+  ring_raw_qrwa=$(get_ring_raw 13)
+  if [[ -n "$ring_raw_qrwa" ]]; then
     local type2_count
-    type2_count=$(echo "$ring_raw" | ring_to_tsv | awk -F'\t' '$4==2{c++} END{print c+0}')
+    type2_count=$(echo "$ring_raw_qrwa" | ring_to_tsv | awk -F'\t' '$4==2{c++} END{print c+0}')
     if [[ "$type2_count" -gt 0 ]]; then
       pass "Pool B → type 2 (qRWA-Holder) Einträge vorhanden (${type2_count})"
     else
       info "Pool B → type 2 nicht im Ring — kein qRWA-Holder in diesem Test"
     fi
   else
-    info "Ring-Buffer konnte nicht geladen werden — Assertions übersprungen (Distributed-Deltas reichen)"
+    info "qRWA Ring-Buffer nicht verfügbar — Assertions übersprungen"
   fi
 }
 
@@ -854,21 +866,29 @@ test_pool_a() {
     fail "Pool A drain" "totalQmineDistributed unverändert"
   fi
 
-  step "Ring-Buffer abfragen (fn 11)"
+  step "QMINE Ring-Buffer abfragen (fn 11)"
   local ring_raw
-  ring_raw=$(get_ring_raw)
+  ring_raw=$(get_ring_raw 11)
   if [[ -n "$ring_raw" ]]; then
     print_ring_payouts "$ring_raw"
     assert_ring_type "Pool A → type 0 (QMINE-Holder payout)" "$id_holder" "0" "$ring_raw"
+  else
+    info "QMINE Ring-Buffer nicht verfügbar — Assertions übersprungen"
+  fi
+
+  step "qRWA Ring-Buffer abfragen (fn 13)"
+  local ring_raw_qrwa
+  ring_raw_qrwa=$(get_ring_raw 13)
+  if [[ -n "$ring_raw_qrwa" ]]; then
     local type2_count
-    type2_count=$(echo "$ring_raw" | ring_to_tsv | awk -F'\t' '$4==2{c++} END{print c+0}')
+    type2_count=$(echo "$ring_raw_qrwa" | ring_to_tsv | awk -F'\t' '$4==2{c++} END{print c+0}')
     if [[ "$type2_count" -gt 0 ]]; then
       pass "Pool A → type 2 (qRWA-Holder) Einträge vorhanden"
     else
       info "Pool A → type 2 nicht im Ring — kein qRWA-Holder in diesem Test"
     fi
   else
-    info "Ring-Buffer nicht verfügbar — Assertions übersprungen"
+    info "qRWA Ring-Buffer nicht verfügbar — Assertions übersprungen"
   fi
 }
 
@@ -962,23 +982,32 @@ test_pool_c() {
     fail "Pool C drain" "totalQRWADistributed unverändert — keine Dedicated qRWA Holder vorhanden?"
   fi
 
-  step "Ring-Buffer abfragen (fn 11)"
+  step "QMINE Ring-Buffer abfragen (fn 11)"
   local ring_raw
-  ring_raw=$(get_ring_raw)
+  ring_raw=$(get_ring_raw 11)
   if [[ -n "$ring_raw" ]]; then
-    local type0_count type3_count
+    local type0_count
     print_ring_payouts "$ring_raw"
     type0_count=$(echo "$ring_raw" | ring_to_tsv | awk -F'\t' '$4==0{c++} END{print c+0}')
-    type3_count=$(echo "$ring_raw" | ring_to_tsv | awk -F'\t' '$4==3{c++} END{print c+0}')
     local payees
     payees=$(echo "$ring_raw" | grep -oE '[A-Z]{60}' | sort -u)
-    info "Adressen im Ring: $(echo "$payees" | wc -l)"
+    info "Adressen im QMINE Ring: $(echo "$payees" | wc -l)"
 
     if [[ "$type0_count" -gt 0 ]]; then
       pass "Pool C → type 0 (QMINE-Holder) Einträge im Ring (${type0_count})"
     else
       fail "Pool C → type 0" "Keine type-0 Einträge im Ring gefunden"
     fi
+  else
+    info "QMINE Ring-Buffer nicht verfügbar — Assertions übersprungen"
+  fi
+
+  step "Dedicated Ring-Buffer abfragen (fn 14)"
+  local ring_raw_ded
+  ring_raw_ded=$(get_ring_raw 14)
+  if [[ -n "$ring_raw_ded" ]]; then
+    local type3_count
+    type3_count=$(echo "$ring_raw_ded" | ring_to_tsv | awk -F'\t' '$4==3{c++} END{print c+0}')
 
     if [[ "$type3_count" -gt 0 ]]; then
       pass "Pool C → type 3 (BTC Mining / Dedicated qRWA) Einträge im Ring (${type3_count})"
@@ -986,7 +1015,7 @@ test_pool_c() {
       fail "Pool C → type 3" "Keine type-3 Einträge im Ring gefunden"
     fi
   else
-    info "Ring-Buffer nicht verfügbar — Ring-Assertions übersprungen"
+    info "Dedicated Ring-Buffer nicht verfügbar — Assertions übersprungen"
   fi
 }
 
@@ -1062,9 +1091,9 @@ test_reducer() {
   info "Holder QU Delta: $((bal_holder_after - bal_holder_before))"
   info "totalQmineDistributed Delta: $((dist_qm_after - dist_qm_before))"
 
-  step "Ring-Buffer abfragen (fn 11)"
+  step "QMINE Ring-Buffer abfragen (fn 11)"
   local ring_raw
-  ring_raw=$(get_ring_raw)
+  ring_raw=$(get_ring_raw 11)
   if [[ -n "$ring_raw" ]]; then
     print_ring_payouts "$ring_raw"
     info "Adressen im Ring (unique): $(echo "$ring_raw" | grep -oE '[A-Z]{60}' | sort -u | wc -l)"
@@ -1073,10 +1102,9 @@ test_reducer() {
     assert_ring_type "Reducer → type 1 (Dev) im Ring" "$dev_id" "1" "$ring_raw"
 
     # Holder darf NICHT type 0 bekommen haben (endBalance = 0)
-    # (Andere Typen, z.B. type 2 aus qRWA-Payouts, sind möglich und dürfen den Test nicht brechen)
     assert_ring_type_absent "Reducer → Holder hat KEIN type 0 (kein QMINE-Payout)" "$id_holder" "0" "$ring_raw"
   else
-    info "Ring-Buffer nicht verfügbar — Ring-Assertions übersprungen"
+    info "QMINE Ring-Buffer nicht verfügbar — Ring-Assertions übersprungen"
   fi
 
   # totalQmineDistributed muss gestiegen sein
