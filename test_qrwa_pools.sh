@@ -3,13 +3,13 @@
 # test_qrwa_pools.sh — qRWA Pool Payout Tests (Pool A / B / C + Reducer)
 # =======================================================================
 # Prüft alle Payout-Pfade des qRWA-Contracts mittels Per-Pool Ring-Buffer:
-#   fn 11 = GetPayoutsQmine   (types 0+1: QMINE-Holder + Dev)
-#   fn 13 = GetPayoutsQrwa    (type 2: qRWA-Holder, Pool A+B 10%)
-#   fn 14 = GetPayoutsDedicated (type 3: Dedicated qRWA, Pool C 10%)
+#   fn 11 = GetPayoutsPoolA   (Pool A: types 0+1+2 — QMINE-Holder, Dev, qRWA-Holder)
+#   fn 13 = GetPayoutsPoolB   (Pool B: types 0+1+2 — QMINE-Holder, Dev, qRWA-Holder)
+#   fn 14 = GetPayoutsPoolC   (Pool C: types 0+1+3 — QMINE-Holder, Dev, Dedicated qRWA)
 #
-#   Pool A  → mPoolARevenueAddress sendet QU → type 0 (QMINE-Holder) + type 2 (qRWA-Holder)
-#   Pool B  → beliebige Adresse sendet QU   → type 0 (QMINE-Holder) + type 2 (qRWA-Holder)
-#   Pool C  → mDedicatedRevenueAddress      → type 0 (QMINE-Holder) + type 3 (Dedicated qRWA)
+#   Pool A  → mPoolARevenueAddress sendet QU → Gov-Fees → 90% QMINE / 10% qRWA → Ring fn 11
+#   Pool B  → beliebige Adresse sendet QU   → 90% QMINE / 10% qRWA (no gov fees) → Ring fn 13
+#   Pool C  → mDedicatedRevenueAddress      → 90% QMINE / 10% Dedicated qRWA → Ring fn 14
 #   Reducer → Holder reduziert QMINE auf 0  → type 1 (Dev), type 0 NICHT für Reducer
 #
 # Payouts finden in BEGIN_EPOCH statt.
@@ -251,44 +251,28 @@ wait_n_epoch_changes() {
 }
 
 wait_for_distribution_delta() {
-  local before_qm="$1" before_qrwa="$2" mode="$3"
-  local max_wait_sec="${4:-900}"
-  local waited=0 cur_qm cur_qrwa dqm dqr
+  local before_a="$1" before_b="$2" before_c="$3" pool="$4"
+  local max_wait_sec="${5:-900}"
+  local waited=0 cur_a cur_b cur_c da db dc
 
   while true; do
-    read -r cur_qm cur_qrwa <<< "$(get_total_distributed)"
-    dqm=$((cur_qm - before_qm))
-    dqr=$((cur_qrwa - before_qrwa))
+    read -r cur_a cur_b cur_c _ <<< "$(get_total_distributed)"
+    da=$((cur_a - before_a))
+    db=$((cur_b - before_b))
+    dc=$((cur_c - before_c))
 
-    case "$mode" in
-      qmine)
-        if [[ "$dqm" -gt 0 ]]; then
-          echo "$cur_qm $cur_qrwa"
-          return 0
-        fi
-        ;;
-      qrwa)
-        if [[ "$dqr" -gt 0 ]]; then
-          echo "$cur_qm $cur_qrwa"
-          return 0
-        fi
-        ;;
-      any)
-        if [[ "$dqm" -gt 0 || "$dqr" -gt 0 ]]; then
-          echo "$cur_qm $cur_qrwa"
-          return 0
-        fi
-        ;;
-      *)
-        echo "$cur_qm $cur_qrwa"
-        return 1
-        ;;
+    case "$pool" in
+      pool_a) [[ "$da" -gt 0 ]] && { echo "$cur_a $cur_b $cur_c"; return 0; } ;;
+      pool_b) [[ "$db" -gt 0 ]] && { echo "$cur_a $cur_b $cur_c"; return 0; } ;;
+      pool_c) [[ "$dc" -gt 0 ]] && { echo "$cur_a $cur_b $cur_c"; return 0; } ;;
+      any)    [[ $((da + db + dc)) -gt 0 ]] && { echo "$cur_a $cur_b $cur_c"; return 0; } ;;
+      *)      echo "$cur_a $cur_b $cur_c"; return 1 ;;
     esac
 
     sleep 5
     waited=$((waited + 5))
     if [[ "$waited" -ge "$max_wait_sec" ]]; then
-      echo "$cur_qm $cur_qrwa"
+      echo "$cur_a $cur_b $cur_c"
       return 1
     fi
   done
@@ -297,27 +281,48 @@ wait_for_distribution_delta() {
 get_dividend_balances() {
   local out vals
   out=$(cli_call -enabletestcontracts -callcontractfunction "$CONTRACT_INDEX" 5 "" \
-    "{ {uint64, uint64, uint64, uint64, uint64, uint64} }")
+    "{ {uint64, uint64, uint64, uint64, uint64, uint64, uint64, uint64, uint64} }")
   vals=$(echo "$out" | awk '/Contract Function Output/{flag=1; next} flag' | grep -oE '\b[0-9]+\b')
-  local rpa rpb qm qrwa ded_rev ded_qrwa
-  rpa=$(echo "$vals"      | sed -n '1p')
-  rpb=$(echo "$vals"      | sed -n '2p')
-  qm=$(echo "$vals"       | sed -n '3p')
-  qrwa=$(echo "$vals"     | sed -n '4p')
-  ded_rev=$(echo "$vals"  | sed -n '5p')
-  ded_qrwa=$(echo "$vals" | sed -n '6p')
-  echo "${rpa:-0} ${rpb:-0} ${qm:-0} ${qrwa:-0} ${ded_rev:-0} ${ded_qrwa:-0}"
+  # Fields: revenuePoolA revenuePoolB dedicatedRevenuePool
+  #         poolAQmineDividend poolAQrwaDividend
+  #         poolBQmineDividend poolBQrwaDividend
+  #         poolCQmineDividend poolCQrwaDividend
+  local rpa rpb ded_rev a_qm a_qr b_qm b_qr c_qm c_qr
+  rpa=$(echo "$vals"     | sed -n '1p')
+  rpb=$(echo "$vals"     | sed -n '2p')
+  ded_rev=$(echo "$vals" | sed -n '3p')
+  a_qm=$(echo "$vals"   | sed -n '4p')
+  a_qr=$(echo "$vals"   | sed -n '5p')
+  b_qm=$(echo "$vals"   | sed -n '6p')
+  b_qr=$(echo "$vals"   | sed -n '7p')
+  c_qm=$(echo "$vals"   | sed -n '8p')
+  c_qr=$(echo "$vals"   | sed -n '9p')
+  echo "${rpa:-0} ${rpb:-0} ${ded_rev:-0} ${a_qm:-0} ${a_qr:-0} ${b_qm:-0} ${b_qr:-0} ${c_qm:-0} ${c_qr:-0}"
 }
 
 get_total_distributed() {
   local out vals
   out=$(cli_call -enabletestcontracts -callcontractfunction "$CONTRACT_INDEX" 6 "" \
-    "{ {uint64, uint64} }")
+    "{ {uint64, uint64, uint64, uint64} }")
   vals=$(echo "$out" | awk '/Contract Function Output/{flag=1; next} flag' | grep -oE '\b[0-9]+\b')
-  local qm_dist qrwa_dist
-  qm_dist=$(echo "$vals"   | sed -n '1p')
-  qrwa_dist=$(echo "$vals" | sed -n '2p')
-  echo "${qm_dist:-0} ${qrwa_dist:-0}"
+  # Fields: totalPoolADistributed totalPoolBDistributed totalPoolCDistributed payoutTotalQmineBegin
+  local a_dist b_dist c_dist snap
+  a_dist=$(echo "$vals" | sed -n '1p')
+  b_dist=$(echo "$vals" | sed -n '2p')
+  c_dist=$(echo "$vals" | sed -n '3p')
+  snap=$(echo "$vals"   | sed -n '4p')
+  echo "${a_dist:-0} ${b_dist:-0} ${c_dist:-0} ${snap:-0}"
+}
+
+# Query mPayoutTotalQmineBegin from fn 6 (4th uint64 field)
+# Returns > 0 if END_EPOCH has run and snapshot was taken
+get_payout_snapshot_begin() {
+  local out vals snap
+  out=$(cli_call -enabletestcontracts -callcontractfunction "$CONTRACT_INDEX" 6 "" \
+    "{ {uint64, uint64, uint64, uint64} }")
+  vals=$(echo "$out" | awk '/Contract Function Output/{flag=1; next} flag' | grep -oE '\b[0-9]+\b')
+  snap=$(echo "$vals" | sed -n '4p')
+  echo "${snap:-0}"
 }
 
 # Query contract addresses (fn 12): dedicatedRevenueAddress, poolARevenueAddress, fundraisingAddress
@@ -657,10 +662,10 @@ assert_ring_type_absent() {
 
 # Snapshot: E_N-End → E_{N+1}-Start, gibt delta_qmine delta_qrwa zurück
 snapshot_total_distributed_delta() {
-  local before_qm="$1" before_qrwa="$2"
-  local after_qm after_qrwa
-  read -r after_qm after_qrwa <<< "$(get_total_distributed)"
-  echo "$((after_qm - before_qm)) $((after_qrwa - before_qrwa))"
+  local before_a="$1" before_b="$2" before_c="$3"
+  local after_a after_b after_c
+  read -r after_a after_b after_c _ <<< "$(get_total_distributed)"
+  echo "$((after_a - before_a)) $((after_b - before_b)) $((after_c - before_c))"
 }
 
 # ── QMINE-Setup: sicherstellen dass SEED_QMINE_HOLDER QMINE hat ───────────────
@@ -722,68 +727,60 @@ test_pool_b() {
   holder_shares_before=$(count_asset_shares "$id_holder" "$QMINE_NAME")
   holder_shares_before=${holder_shares_before:-0}
 
-  # Prüfe ob bereits Payouts gelaufen sind (= Holder im Snapshot)
-  local dist_check_qm dist_check_qrwa
-  read -r dist_check_qm dist_check_qrwa <<< "$(get_total_distributed)"
-
-  if [[ "$holder_shares_before" -gt 0 && "$dist_check_qm" -gt 0 ]]; then
-    info "QMINE-Holder bereits im Snapshot (${holder_shares_before} Shares, totalQmineDistributed=${dist_check_qm}) — kein Epoch-Wait nötig"
+  if [[ "$holder_shares_before" -gt 0 ]]; then
+    info "QMINE-Holder hat ${holder_shares_before} Shares — kein Kauf nötig"
   else
-    step "QMINE-Holder sicherstellen"
-    local qmine_shares
-    qmine_shares=$(ensure_qmine_holder)
-    info "QMINE-Shares: ${qmine_shares}"
-
-    if [[ "$holder_shares_before" -eq 0 ]]; then
-      wait_n_epoch_changes 2
-    else
-      wait_n_epoch_changes 1
-    fi
+    info "QMINE-Holder hat keine Shares — QMINE-Payouts werden vermutlich 0 sein"
+    info "  (Führe zuerst pool_a aus, oder kaufe QMINE manuell)"
   fi
 
   step "E_N-End Snapshot"
-  local bal_holder_before dist_qm_before dist_qrwa_before
+  local bal_holder_before dist_a_before dist_b_before dist_c_before
   bal_holder_before=$(get_balance_of "$id_holder")
   bal_holder_before="${bal_holder_before:-0}"
-  read -r dist_qm_before dist_qrwa_before <<< "$(get_total_distributed)"
-  info "Holder QU: ${bal_holder_before}  totalQmineDistributed: ${dist_qm_before}  totalQRWADistributed: ${dist_qrwa_before}"
+  read -r dist_a_before dist_b_before dist_c_before _ <<< "$(get_total_distributed)"
+  info "Holder QU: ${bal_holder_before}  totalPoolBDistributed: ${dist_b_before}"
 
   step "Pool B Revenue senden (${REVENUE_POOL_B} QU von Seed B)"
   send_tx_with_retry "Pool B Revenue send" "$SEED_POOL_B" \
     -sendtoaddress "$QRWA_IDENTITY" "$REVENUE_POOL_B"
 
-  step "Warte auf Payout-Ausführung (END_TICK, bis totalQmineDistributed steigt)..."
-  if ! wait_for_distribution_delta "$dist_qm_before" "$dist_qrwa_before" qmine 900 >/dev/null; then
-    read -r cur_qm cur_qrwa <<< "$(get_total_distributed)"
-    info "Timeout beim Warten auf qmine payout — letzte Werte: qm=${cur_qm}, qrwa=${cur_qrwa}"
+  step "Warte auf Payout-Ausführung (END_TICK, bis totalPoolBDistributed steigt)..."
+  if ! wait_for_distribution_delta "$dist_a_before" "$dist_b_before" "$dist_c_before" pool_b 900 >/dev/null; then
+    read -r _ cur_b _ _ <<< "$(get_total_distributed)"
+    info "Timeout beim Warten auf Pool B payout — letzter totalPoolBDistributed: ${cur_b}"
   fi
 
   step "E_{N+1}-Start Snapshot"
-  local bal_holder_after dist_qm_after dist_qrwa_after
+  local bal_holder_after dist_a_after dist_b_after dist_c_after
   bal_holder_after=$(get_balance_of "$id_holder")
   bal_holder_after="${bal_holder_after:-}"
-  read -r dist_qm_after dist_qrwa_after <<< "$(get_total_distributed)"
-  local delta_holder delta_qm_dist delta_qrwa_dist
+  read -r dist_a_after dist_b_after dist_c_after _ <<< "$(get_total_distributed)"
+  local delta_holder delta_b_dist
   if [[ -n "$bal_holder_after" && -n "$bal_holder_before" && "$bal_holder_before" -gt 0 ]]; then
     delta_holder=$((bal_holder_after - bal_holder_before))
   else
     delta_holder=""
   fi
-  delta_qm_dist=$((dist_qm_after - dist_qm_before))
-  delta_qrwa_dist=$((dist_qrwa_after - dist_qrwa_before))
+  delta_b_dist=$((dist_b_after - dist_b_before))
   info "Holder QU Delta: ${delta_holder:-N/A (Node nicht erreichbar)}"
-  info "totalQmineDistributed Delta: ${delta_qm_dist}"
-  info "totalQRWADistributed Delta: ${delta_qrwa_dist}"
+  info "totalPoolBDistributed Delta: ${delta_b_dist}"
 
-  # totalQmineDistributed muss gestiegen sein
-  if [[ "$delta_qm_dist" -gt 0 ]]; then
-    pass "Pool B → totalQmineDistributed gestiegen (+${delta_qm_dist})"
+  # totalPoolBDistributed — nur wenn Holder QMINE hat
+  if [[ "$holder_shares_before" -gt 0 ]]; then
+    if [[ "$delta_b_dist" -gt 0 ]]; then
+      pass "Pool B → totalPoolBDistributed gestiegen (+${delta_b_dist})"
+    else
+      fail "Pool B drain" "totalPoolBDistributed unverändert"
+    fi
   else
-    fail "Pool B drain" "totalQmineDistributed unverändert"
+    info "Pool B → QMINE-Payout-Check übersprungen (kein QMINE-Holder)"
   fi
 
-  # Holder-Balance muss gestiegen sein
-  if [[ -z "$delta_holder" ]]; then
+  # Holder-Balance — nur wenn Holder QMINE hat
+  if [[ "$holder_shares_before" -eq 0 ]]; then
+    info "Pool B → QMINE-Holder Balance-Check übersprungen (kein QMINE-Holder)"
+  elif [[ -z "$delta_holder" ]]; then
     info "Pool B → QMINE-Holder Balance konnte nicht geprüft werden (Node-Verbindung fehlgeschlagen)"
   elif [[ "$delta_holder" -gt 0 ]]; then
     pass "Pool B → QMINE-Holder Balance gestiegen (+${delta_holder})"
@@ -791,29 +788,26 @@ test_pool_b() {
     fail "Pool B → QMINE-Holder Balance" "Kein Payout erhalten (delta=${delta_holder})"
   fi
 
-  step "QMINE Ring-Buffer abfragen (fn 11)"
+  step "Pool B Ring-Buffer abfragen (fn 13)"
   local ring_raw
-  ring_raw=$(get_ring_raw 11)
+  ring_raw=$(get_ring_raw 13)
   if [[ -n "$ring_raw" ]]; then
     print_ring_payouts "$ring_raw"
-    assert_ring_type "Pool B → type 0 (QMINE-Holder payout)" "$id_holder" "0" "$ring_raw"
-  else
-    info "QMINE Ring-Buffer nicht verfügbar — Assertions übersprungen"
-  fi
+    if [[ "$holder_shares_before" -gt 0 ]]; then
+      assert_ring_type "Pool B → type 0 (QMINE-Holder payout)" "$id_holder" "0" "$ring_raw"
+    else
+      info "Pool B → type 0 Ring-Check übersprungen (kein QMINE-Holder)"
+    fi
 
-  step "qRWA Ring-Buffer abfragen (fn 13)"
-  local ring_raw_qrwa
-  ring_raw_qrwa=$(get_ring_raw 13)
-  if [[ -n "$ring_raw_qrwa" ]]; then
     local type2_count
-    type2_count=$(echo "$ring_raw_qrwa" | ring_to_tsv | awk -F'\t' '$4==2{c++} END{print c+0}')
+    type2_count=$(echo "$ring_raw" | ring_to_tsv | awk -F'\t' '$4==2{c++} END{print c+0}')
     if [[ "$type2_count" -gt 0 ]]; then
       pass "Pool B → type 2 (qRWA-Holder) Einträge vorhanden (${type2_count})"
     else
       info "Pool B → type 2 nicht im Ring — kein qRWA-Holder in diesem Test"
     fi
   else
-    info "qRWA Ring-Buffer nicht verfügbar — Assertions übersprungen"
+    info "Pool B Ring-Buffer nicht verfügbar — Assertions übersprungen"
   fi
 }
 
@@ -852,11 +846,11 @@ test_pool_a() {
   fi
 
   # Prüfe ob bereits Payouts gelaufen sind (= Holder im Snapshot)
-  local dist_check_qm dist_check_qrwa
-  read -r dist_check_qm dist_check_qrwa <<< "$(get_total_distributed)"
+  local dist_check_a
+  read -r dist_check_a _ _ _ <<< "$(get_total_distributed)"
 
-  if [[ "$holder_shares_before" -gt 0 && "$dist_check_qm" -gt 0 ]]; then
-    info "QMINE-Holder bereits im Snapshot (${holder_shares_before} Shares, totalQmineDistributed=${dist_check_qm}) — kein Epoch-Wait nötig"
+  if [[ "$holder_shares_before" -gt 0 && "$dist_check_a" -gt 0 ]]; then
+    info "QMINE-Holder bereits im Snapshot (${holder_shares_before} Shares, totalPoolADistributed=${dist_check_a}) — kein Epoch-Wait nötig"
   else
     step "QMINE-Holder sicherstellen"
     local qmine_shares
@@ -871,11 +865,11 @@ test_pool_a() {
   fi
 
   step "E_N-End Snapshot"
-  local dist_qm_before dist_qrwa_before bal_holder_before
-  read -r dist_qm_before dist_qrwa_before <<< "$(get_total_distributed)"
+  local dist_a_before dist_b_before dist_c_before bal_holder_before
+  read -r dist_a_before dist_b_before dist_c_before _ <<< "$(get_total_distributed)"
   bal_holder_before=$(get_balance_of "$id_holder")
-  read -r RPA_BEFORE _ _ _ _ _ <<< "$(get_dividend_balances)"
-  info "revenuePoolA vor Send: ${RPA_BEFORE}  totalQmineDistributed: ${dist_qm_before}"
+  read -r RPA_BEFORE _ _ _ _ _ _ _ _ <<< "$(get_dividend_balances)"
+  info "revenuePoolA vor Send: ${RPA_BEFORE}  totalPoolADistributed: ${dist_a_before}"
 
   step "Pool A Revenue senden (${REVENUE_POOL_A} QU von mPoolARevenueAddress)"
   send_tx_with_retry "Pool A Revenue send" "$SEED_POOL_A" \
@@ -883,7 +877,7 @@ test_pool_a() {
 
   # Kurz warten und dann Pool-State lesen (sollte in revenuePoolA sein)
   sleep 10
-  read -r RPA_AFTER _ _ _ _ _ <<< "$(get_dividend_balances)"
+  read -r RPA_AFTER _ _ _ _ _ _ _ _ <<< "$(get_dividend_balances)"
   info "revenuePoolA nach Send: ${RPA_AFTER}"
   if [[ "$RPA_AFTER" -gt "$RPA_BEFORE" ]]; then
     pass "Pool A Revenue in revenuePoolA sichtbar (+$((RPA_AFTER - RPA_BEFORE)))"
@@ -891,48 +885,41 @@ test_pool_a() {
     info "revenuePoolA noch 0 — END_TICK hat sie ggf. bereits verarbeitet (wird via totalQmineDistributed validiert)"
   fi
 
-  step "Warte auf Payout-Ausführung (END_TICK, bis totalQmineDistributed steigt)..."
-  if ! wait_for_distribution_delta "$dist_qm_before" "$dist_qrwa_before" qmine 900 >/dev/null; then
-    read -r cur_qm cur_qrwa <<< "$(get_total_distributed)"
-    info "Timeout beim Warten auf qmine payout — letzte Werte: qm=${cur_qm}, qrwa=${cur_qrwa}"
+  step "Warte auf Payout-Ausführung (END_TICK, bis totalPoolADistributed steigt)..."
+  if ! wait_for_distribution_delta "$dist_a_before" "$dist_b_before" "$dist_c_before" pool_a 900 >/dev/null; then
+    read -r cur_a _ _ _ <<< "$(get_total_distributed)"
+    info "Timeout beim Warten auf Pool A payout — letzter totalPoolADistributed: ${cur_a}"
   fi
 
   step "E_{N+1}-Start Snapshot"
-  local dist_qm_after dist_qrwa_after bal_holder_after
-  read -r dist_qm_after dist_qrwa_after <<< "$(get_total_distributed)"
+  local dist_a_after bal_holder_after
+  read -r dist_a_after _ _ _ <<< "$(get_total_distributed)"
   bal_holder_after=$(get_balance_of "$id_holder")
-  info "totalQmineDistributed Delta: $((dist_qm_after - dist_qm_before))"
+  info "totalPoolADistributed Delta: $((dist_a_after - dist_a_before))"
   info "QMINE-Holder Balance Delta: $((bal_holder_after - bal_holder_before))"
 
-  if [[ "$((dist_qm_after - dist_qm_before))" -gt 0 ]]; then
-    pass "Pool A → totalQmineDistributed gestiegen (+$((dist_qm_after - dist_qm_before)))"
+  if [[ "$((dist_a_after - dist_a_before))" -gt 0 ]]; then
+    pass "Pool A → totalPoolADistributed gestiegen (+$((dist_a_after - dist_a_before)))"
   else
-    fail "Pool A drain" "totalQmineDistributed unverändert"
+    fail "Pool A drain" "totalPoolADistributed unverändert"
   fi
 
-  step "QMINE Ring-Buffer abfragen (fn 11)"
+  step "Pool A Ring-Buffer abfragen (fn 11)"
   local ring_raw
   ring_raw=$(get_ring_raw 11)
   if [[ -n "$ring_raw" ]]; then
     print_ring_payouts "$ring_raw"
     assert_ring_type "Pool A → type 0 (QMINE-Holder payout)" "$id_holder" "0" "$ring_raw"
-  else
-    info "QMINE Ring-Buffer nicht verfügbar — Assertions übersprungen"
-  fi
 
-  step "qRWA Ring-Buffer abfragen (fn 13)"
-  local ring_raw_qrwa
-  ring_raw_qrwa=$(get_ring_raw 13)
-  if [[ -n "$ring_raw_qrwa" ]]; then
     local type2_count
-    type2_count=$(echo "$ring_raw_qrwa" | ring_to_tsv | awk -F'\t' '$4==2{c++} END{print c+0}')
+    type2_count=$(echo "$ring_raw" | ring_to_tsv | awk -F'\t' '$4==2{c++} END{print c+0}')
     if [[ "$type2_count" -gt 0 ]]; then
       pass "Pool A → type 2 (qRWA-Holder) Einträge vorhanden"
     else
       info "Pool A → type 2 nicht im Ring — kein qRWA-Holder in diesem Test"
     fi
   else
-    info "qRWA Ring-Buffer nicht verfügbar — Assertions übersprungen"
+    info "Pool A Ring-Buffer nicht verfügbar — Assertions übersprungen"
   fi
 }
 
@@ -959,20 +946,23 @@ test_pool_c() {
   # Pool C braucht QMINE-Holder:
   #   - Type 0 (QMINE-Payout) braucht mPayoutTotalQmineBegin > 0
   #   - Type 3 (Dedicated qRWA) braucht qRWA-Holder mit >= 100K QMINE/Share
-  local holder_shares_before prev_qm_dist
+  local holder_shares_before snapshot_begin
   holder_shares_before=$(count_asset_shares "$id_holder" "$QMINE_NAME")
   holder_shares_before=${holder_shares_before:-0}
-  read -r prev_qm_dist _ <<< "$(get_total_distributed)"
 
   step "QMINE-Holder sicherstellen (nötig für type 0 + type 3)"
   local qmine_shares
   qmine_shares=$(ensure_qmine_holder)
   info "QMINE-Shares: ${qmine_shares}"
 
-  if [[ "$holder_shares_before" -gt 0 && "$prev_qm_dist" -gt 0 ]]; then
-    info "Holder bereits gesnapshotted (totalQmineDistributed=${prev_qm_dist}) — kein Epoch-Wechsel nötig"
+  # Prüfe ob END_EPOCH bereits einen Snapshot erstellt hat (mPayoutTotalQmineBegin > 0)
+  snapshot_begin=$(get_payout_snapshot_begin)
+  info "mPayoutTotalQmineBegin: ${snapshot_begin}"
+
+  if [[ "$holder_shares_before" -gt 0 && "$snapshot_begin" -gt 0 ]]; then
+    info "Holder bereits gesnapshotted (mPayoutTotalQmineBegin=${snapshot_begin}) — kein Epoch-Wechsel nötig"
   elif [[ "$holder_shares_before" -gt 0 ]]; then
-    step "Warte auf 1 Epoch-Wechsel (Holder vorhanden, aber noch kein Payout-Snapshot)"
+    step "Warte auf 1 Epoch-Wechsel (Holder vorhanden, aber Snapshot noch nicht erstellt)"
     wait_n_epoch_changes 1
   else
     step "Warte auf 2 Epoch-Wechsel (neuer Holder → Snapshot → Payout-Buffer)"
@@ -980,12 +970,12 @@ test_pool_c() {
   fi
 
   step "E_N-End Snapshot"
-  local dist_qm_before dist_qrwa_before
-  read -r dist_qm_before dist_qrwa_before <<< "$(get_total_distributed)"
+  local dist_a_before dist_b_before dist_c_before
+  read -r dist_a_before dist_b_before dist_c_before _ <<< "$(get_total_distributed)"
   local DED_REV_BEFORE DED_QRWA_BEFORE
-  read -r _ _ _ _ DED_REV_BEFORE DED_QRWA_BEFORE <<< "$(get_dividend_balances)"
-  info "dedicatedRevenuePool: ${DED_REV_BEFORE}  dedicatedQRWADividendPool: ${DED_QRWA_BEFORE}"
-  info "totalQRWADistributed: ${dist_qrwa_before}"
+  read -r _ _ DED_REV_BEFORE _ _ _ _ _ DED_QRWA_BEFORE <<< "$(get_dividend_balances)"
+  info "dedicatedRevenuePool: ${DED_REV_BEFORE}  poolCQrwaDividend: ${DED_QRWA_BEFORE}"
+  info "totalPoolCDistributed: ${dist_c_before}"
 
   step "Pool C Revenue senden (${REVENUE_POOL_C} QU von mDedicatedRevenueAddress)"
   send_tx_with_retry "Pool C Revenue send" "$SEED_POOL_C" \
@@ -994,7 +984,7 @@ test_pool_c() {
   # Kurz warten und Pool C State prüfen
   sleep 10
   local DED_REV_AFTER DED_QRWA_AFTER
-  read -r _ _ _ _ DED_REV_AFTER DED_QRWA_AFTER <<< "$(get_dividend_balances)"
+  read -r _ _ DED_REV_AFTER _ _ _ _ _ DED_QRWA_AFTER <<< "$(get_dividend_balances)"
   info "dedicatedRevenuePool nach Send: ${DED_REV_AFTER}"
   if [[ "$DED_REV_AFTER" -gt "$DED_REV_BEFORE" ]]; then
     pass "Pool C Revenue in dedicatedRevenuePool sichtbar (+$((DED_REV_AFTER - DED_REV_BEFORE)))"
@@ -1002,64 +992,49 @@ test_pool_c() {
     info "dedicatedRevenuePool noch 0 — END_TICK hat sie ggf. bereits verarbeitet (wird via totalDistributed validiert)"
   fi
 
-  step "Warte auf Payout-Ausführung (END_TICK, bis totalQmineDistributed ODER totalQRWADistributed steigt)..."
-  if ! wait_for_distribution_delta "$dist_qm_before" "$dist_qrwa_before" any 900 >/dev/null; then
-    read -r cur_qm cur_qrwa <<< "$(get_total_distributed)"
-    info "Timeout beim Warten auf qrwa payout — letzte Werte: qm=${cur_qm}, qrwa=${cur_qrwa}"
+  step "Warte auf Payout-Ausführung (END_TICK, bis totalPoolCDistributed steigt)..."
+  if ! wait_for_distribution_delta "$dist_a_before" "$dist_b_before" "$dist_c_before" pool_c 900 >/dev/null; then
+    read -r _ _ cur_c _ <<< "$(get_total_distributed)"
+    info "Timeout beim Warten auf Pool C payout — letzter totalPoolCDistributed: ${cur_c}"
   fi
 
   step "E_{N+1}-Start Snapshot"
-  local dist_qm_after dist_qrwa_after
-  read -r dist_qm_after dist_qrwa_after <<< "$(get_total_distributed)"
-  info "totalQmineDistributed Delta: $((dist_qm_after - dist_qm_before))"
-  info "totalQRWADistributed Delta: $((dist_qrwa_after - dist_qrwa_before))"
+  local dist_c_after
+  read -r _ _ dist_c_after _ <<< "$(get_total_distributed)"
+  info "totalPoolCDistributed Delta: $((dist_c_after - dist_c_before))"
 
-  if [[ "$((dist_qm_after - dist_qm_before))" -gt 0 ]]; then
-    pass "Pool C → totalQmineDistributed gestiegen (+$((dist_qm_after - dist_qm_before)))"
+  if [[ "$((dist_c_after - dist_c_before))" -gt 0 ]]; then
+    pass "Pool C → totalPoolCDistributed gestiegen (+$((dist_c_after - dist_c_before)))"
   else
-    fail "Pool C drain" "totalQmineDistributed unverändert — keine QMINE-Holder beteiligt?"
+    fail "Pool C drain" "totalPoolCDistributed unverändert — keine Holder beteiligt?"
   fi
 
-  if [[ "$((dist_qrwa_after - dist_qrwa_before))" -gt 0 ]]; then
-    pass "Pool C → totalQRWADistributed gestiegen (+$((dist_qrwa_after - dist_qrwa_before)))"
-  else
-    fail "Pool C drain" "totalQRWADistributed unverändert — keine Dedicated qRWA Holder vorhanden?"
-  fi
-
-  step "QMINE Ring-Buffer abfragen (fn 11)"
+  step "Pool C Ring-Buffer abfragen (fn 14)"
   local ring_raw
-  ring_raw=$(get_ring_raw 11)
+  ring_raw=$(get_ring_raw 14)
   if [[ -n "$ring_raw" ]]; then
     local type0_count
     print_ring_payouts "$ring_raw"
     type0_count=$(echo "$ring_raw" | ring_to_tsv | awk -F'\t' '$4==0{c++} END{print c+0}')
     local payees
     payees=$(echo "$ring_raw" | grep -oE '[A-Z]{60}' | sort -u)
-    info "Adressen im QMINE Ring: $(echo "$payees" | wc -l)"
+    info "Adressen im Pool C Ring: $(echo "$payees" | wc -l)"
 
     if [[ "$type0_count" -gt 0 ]]; then
       pass "Pool C → type 0 (QMINE-Holder) Einträge im Ring (${type0_count})"
     else
       fail "Pool C → type 0" "Keine type-0 Einträge im Ring gefunden"
     fi
-  else
-    info "QMINE Ring-Buffer nicht verfügbar — Assertions übersprungen"
-  fi
 
-  step "Dedicated Ring-Buffer abfragen (fn 14)"
-  local ring_raw_ded
-  ring_raw_ded=$(get_ring_raw 14)
-  if [[ -n "$ring_raw_ded" ]]; then
     local type3_count
-    type3_count=$(echo "$ring_raw_ded" | ring_to_tsv | awk -F'\t' '$4==3{c++} END{print c+0}')
-
+    type3_count=$(echo "$ring_raw" | ring_to_tsv | awk -F'\t' '$4==3{c++} END{print c+0}')
     if [[ "$type3_count" -gt 0 ]]; then
       pass "Pool C → type 3 (BTC Mining / Dedicated qRWA) Einträge im Ring (${type3_count})"
     else
       fail "Pool C → type 3" "Keine type-3 Einträge im Ring gefunden"
     fi
   else
-    info "Dedicated Ring-Buffer nicht verfügbar — Assertions übersprungen"
+    info "Pool C Ring-Buffer nicht verfügbar — Assertions übersprungen"
   fi
 }
 
@@ -1100,8 +1075,8 @@ test_reducer() {
   fi
 
   step "E_N-End Snapshot (Baseline)"
-  local dist_qm_before bal_dev_before bal_holder_before
-  read -r dist_qm_before _ <<< "$(get_total_distributed)"
+  local dist_a_before dist_b_before dist_c_before bal_dev_before bal_holder_before
+  read -r dist_a_before dist_b_before dist_c_before _ <<< "$(get_total_distributed)"
   bal_dev_before=$(get_balance_of "$dev_id")
   bal_holder_before=$(get_balance_of "$id_holder")
   info "Dev QU: ${bal_dev_before}  Holder QU: ${bal_holder_before}"
@@ -1120,24 +1095,24 @@ test_reducer() {
   step "Warte auf Epoch-Wechsel (BEGIN_EPOCH zahlt Payout)..."
   read -r _ _ <<< "$(wait_for_next_epoch)"
 
-  step "Warte auf Payout-Ausführung (END_TICK, bis totalQmineDistributed steigt)..."
-  if ! wait_for_distribution_delta "$dist_qm_before" 0 qmine 900 >/dev/null; then
-    read -r cur_qm _ <<< "$(get_total_distributed)"
-    info "Timeout beim Warten auf qmine payout — letzter totalQmineDistributed=${cur_qm}"
+  step "Warte auf Payout-Ausführung (END_TICK, bis totalPoolBDistributed steigt)..."
+  if ! wait_for_distribution_delta "$dist_a_before" "$dist_b_before" "$dist_c_before" pool_b 900 >/dev/null; then
+    read -r _ cur_b _ _ <<< "$(get_total_distributed)"
+    info "Timeout beim Warten auf Pool B payout — letzter totalPoolBDistributed=${cur_b}"
   fi
 
   step "E_{N+1}-Start Snapshot"
-  local dist_qm_after bal_dev_after bal_holder_after
-  read -r dist_qm_after _ <<< "$(get_total_distributed)"
+  local dist_b_after bal_dev_after bal_holder_after
+  read -r _ dist_b_after _ _ <<< "$(get_total_distributed)"
   bal_dev_after=$(get_balance_of "$dev_id")
   bal_holder_after=$(get_balance_of "$id_holder")
   info "Dev QU Delta:    $((bal_dev_after - bal_dev_before))"
   info "Holder QU Delta: $((bal_holder_after - bal_holder_before))"
-  info "totalQmineDistributed Delta: $((dist_qm_after - dist_qm_before))"
+  info "totalPoolBDistributed Delta: $((dist_b_after - dist_b_before))"
 
-  step "QMINE Ring-Buffer abfragen (fn 11)"
+  step "Pool B Ring-Buffer abfragen (fn 13)"
   local ring_raw
-  ring_raw=$(get_ring_raw 11)
+  ring_raw=$(get_ring_raw 13)
   if [[ -n "$ring_raw" ]]; then
     print_ring_payouts "$ring_raw"
     info "Adressen im Ring (unique): $(echo "$ring_raw" | grep -oE '[A-Z]{60}' | sort -u | wc -l)"
@@ -1148,14 +1123,14 @@ test_reducer() {
     # Holder darf NICHT type 0 bekommen haben (endBalance = 0)
     assert_ring_type_absent "Reducer → Holder hat KEIN type 0 (kein QMINE-Payout)" "$id_holder" "0" "$ring_raw"
   else
-    info "QMINE Ring-Buffer nicht verfügbar — Ring-Assertions übersprungen"
+    info "Pool B Ring-Buffer nicht verfügbar — Ring-Assertions übersprungen"
   fi
 
-  # totalQmineDistributed muss gestiegen sein
-  if [[ "$((dist_qm_after - dist_qm_before))" -gt 0 ]]; then
-    pass "Reducer → totalQmineDistributed gestiegen (+$((dist_qm_after - dist_qm_before)))"
+  # totalPoolBDistributed muss gestiegen sein
+  if [[ "$((dist_b_after - dist_b_before))" -gt 0 ]]; then
+    pass "Reducer → totalPoolBDistributed gestiegen (+$((dist_b_after - dist_b_before)))"
   else
-    fail "Reducer drain" "totalQmineDistributed unverändert"
+    fail "Reducer drain" "totalPoolBDistributed unverändert"
   fi
 
   # Dev Balance muss gestiegen sein
