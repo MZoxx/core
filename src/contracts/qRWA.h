@@ -178,10 +178,14 @@ struct QRWA : public ContractBase
     {
         uint64 totalAmount;     // Sum of all payout amounts in this batch (excl. fee)
         uint64 fee;             // QUTIL fee paid (10 QU)
+        sint64 invocationReward; // Amount passed to INVOKE (batchTotal + fee)
         uint32 tick;            // Network tick when batch was fired
+        sint32 returnCode;      // QUTIL SendToManyV1 returnCode (0 = success)
         uint16 epoch;           // Epoch of the batch
         uint8 recipientCount;   // Number of recipients in this batch (1-25)
-        uint8 status;           // 0 = success, 1 = failed
+        uint8 status;           // 0 = success, 1 = interContractCallError, 2 = returnCode error
+        uint8 callError;        // InterContractCallError value (0=NoCallError, 1=ErrorState, 2=InsufficientFees, 3=AllocFailed)
+        uint8 _pad[3];          // Padding to 40 bytes
     };
 
 protected:
@@ -1819,9 +1823,12 @@ public:
                                                 INVOKE_OTHER_CONTRACT_PROCEDURE(QUTIL, SendToManyV1, locals.stm1Input, locals.stm1Output, (sint64)(locals.batchTotal + QRWA_QUTIL_FEE));
                                                 locals.batchEntry.totalAmount = locals.batchTotal;
                                                 locals.batchEntry.fee = (uint64)QRWA_QUTIL_FEE;
+                                                locals.batchEntry.invocationReward = (sint64)(locals.batchTotal + QRWA_QUTIL_FEE);
                                                 locals.batchEntry.tick = qpi.tick();
                                                 locals.batchEntry.epoch = qpi.epoch();
                                                 locals.batchEntry.recipientCount = (uint8)locals.batchCount;
+                                                locals.batchEntry.callError = (uint8)interContractCallError;
+                                                locals.batchEntry.returnCode = locals.stm1Output.returnCode;
                                                 if (interContractCallError == NoCallError && locals.stm1Output.returnCode == 0)
                                                 {
                                                     locals.batchEntry.status = 0;
@@ -1836,7 +1843,7 @@ public:
                                                 }
                                                 else
                                                 {
-                                                    locals.batchEntry.status = 1;
+                                                    locals.batchEntry.status = (interContractCallError != NoCallError) ? 1 : 2;
                                                     // Batch failed — add amounts back to pool for next payout cycle
                                                     for (locals.batchFlushIdx = 0; locals.batchFlushIdx < locals.batchCount; locals.batchFlushIdx++)
                                                     {
@@ -1921,9 +1928,12 @@ public:
                             INVOKE_OTHER_CONTRACT_PROCEDURE(QUTIL, SendToManyV1, locals.stm1Input, locals.stm1Output, (sint64)(locals.batchTotal + QRWA_QUTIL_FEE));
                             locals.batchEntry.totalAmount = locals.batchTotal;
                             locals.batchEntry.fee = (uint64)QRWA_QUTIL_FEE;
+                            locals.batchEntry.invocationReward = (sint64)(locals.batchTotal + QRWA_QUTIL_FEE);
                             locals.batchEntry.tick = qpi.tick();
                             locals.batchEntry.epoch = qpi.epoch();
                             locals.batchEntry.recipientCount = (uint8)locals.batchCount;
+                            locals.batchEntry.callError = (uint8)interContractCallError;
+                            locals.batchEntry.returnCode = locals.stm1Output.returnCode;
                             if (interContractCallError == NoCallError && locals.stm1Output.returnCode == 0)
                             {
                                 locals.batchEntry.status = 0;
@@ -1938,7 +1948,7 @@ public:
                             }
                             else
                             {
-                                locals.batchEntry.status = 1;
+                                locals.batchEntry.status = (interContractCallError != NoCallError) ? 1 : 2;
                                 // Batch failed — add amounts back to pool for next payout cycle
                                 for (locals.batchFlushIdx = 0; locals.batchFlushIdx < locals.batchCount; locals.batchFlushIdx++)
                                 {
