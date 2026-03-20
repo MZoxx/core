@@ -2229,9 +2229,11 @@ public:
         }
 
         // Revenue routing:
-        // Pool A: QUTIL contract OR mPoolARevenueAddress (QMINE issuer / mining revenue)
+        // Pool A: mPoolARevenueAddress (QMINE issuer / mining revenue)
+        //         NOTE: QUTIL refunds (from failed SendToManyV1) are NOT routed here to avoid
+        //         double-counting — the failure recovery code already preserves amounts in mPoolAQmineDividend.
         // Pool C: Dedicated BTC revenue address (mDedicatedRevenueAddress)
-        // Pool B: Everything else (users, other contracts)
+        // Pool B: Everything else (users, other contracts, QUTIL)
         if (state.mDedicatedRevenueAddress != NULL_ID && input.sourceId == state.mDedicatedRevenueAddress)
         {
             // Pool C: Dedicated BTC revenue address
@@ -2243,10 +2245,9 @@ public:
             locals.logger.valueB = input.type;
             LOG_INFO(locals.logger);
         }
-        else if (input.sourceId == id(QUTIL_CONTRACT_INDEX, 0, 0, 0) ||
-                 (state.mPoolARevenueAddress != NULL_ID && input.sourceId == state.mPoolARevenueAddress))
+        else if (state.mPoolARevenueAddress != NULL_ID && input.sourceId == state.mPoolARevenueAddress)
         {
-            // Pool A: QUTIL (SendToMany) or direct transfer from Pool A revenue address
+            // Pool A: Direct transfer from Pool A revenue address only
             state.mRevenuePoolA = sadd(state.mRevenuePoolA, static_cast<uint64>(input.amount));
             locals.logger.contractId = CONTRACT_INDEX;
             locals.logger.logType = QRWA_LOG_TYPE_INCOMING_REVENUE_A;
