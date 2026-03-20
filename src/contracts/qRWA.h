@@ -6,11 +6,11 @@ using namespace QPI;
 
 constexpr uint64 QRWA_MAX_QMINE_HOLDERS = 131072 * X_MULTIPLIER; // 2^17 = 128K unique holders max (563MB → 37MB state)
 constexpr uint64 QRWA_MAX_GOV_POLLS = 64; // 8 active polls * 8 epochs = 64 slots
-constexpr uint64 QRWA_MAX_ASSET_POLLS = 64; // 8 active polls * 8 epochs = 64 slots
+
 constexpr uint64 QRWA_MAX_ASSETS = 1024; // 2^10
 
 constexpr uint64 QRWA_MAX_NEW_GOV_POLLS_PER_EPOCH = 8;
-constexpr uint64 QRWA_MAX_NEW_ASSET_POLLS_PER_EPOCH = 8;
+
 
 // Dividend percentage constants
 constexpr uint64 QRWA_QMINE_HOLDER_PERCENT = 900; // 90.0%
@@ -43,7 +43,7 @@ constexpr uint64 QRWA_POLL_STATUS_EMPTY = 0;
 constexpr uint64 QRWA_POLL_STATUS_ACTIVE = 1; // poll is live, can be voted
 constexpr uint64 QRWA_POLL_STATUS_PASSED_EXECUTED = 2; // poll inactive, result is YES
 constexpr uint64 QRWA_POLL_STATUS_FAILED_VOTE = 3; // poll inactive, result is NO
-constexpr uint64 QRWA_POLL_STATUS_PASSED_FAILED_EXECUTION = 4; // poll inactive, result is YES but failed to release asset
+
 
 // QX Fee for releasing management rights
 constexpr sint64 QRWA_RELEASE_MANAGEMENT_FEE = 100;
@@ -51,9 +51,7 @@ constexpr sint64 QRWA_RELEASE_MANAGEMENT_FEE = 100;
 // LOG TYPES
 constexpr uint64 QRWA_LOG_TYPE_DISTRIBUTION = 1;
 constexpr uint64 QRWA_LOG_TYPE_GOV_VOTE = 2;
-constexpr uint64 QRWA_LOG_TYPE_ASSET_POLL_CREATED = 3;
-constexpr uint64 QRWA_LOG_TYPE_ASSET_VOTE = 4;
-constexpr uint64 QRWA_LOG_TYPE_ASSET_POLL_EXECUTED = 5;
+
 constexpr uint64 QRWA_LOG_TYPE_TREASURY_DONATION = 6;
 constexpr uint64 QRWA_LOG_TYPE_ADMIN_ACTION = 7;
 constexpr uint64 QRWA_LOG_TYPE_ERROR = 8;
@@ -71,6 +69,14 @@ constexpr uint8 QRWA_PAYOUT_TYPE_QMINE_HOLDER    = 0; // Regular QMINE holder pa
 constexpr uint8 QRWA_PAYOUT_TYPE_QMINE_DEV       = 1; // Dev address gets reducer's portion
 constexpr uint8 QRWA_PAYOUT_TYPE_QRWA_HOLDER     = 2; // qRWA shareholder (Pool B)
 constexpr uint8 QRWA_PAYOUT_TYPE_DEDICATED_QRWA  = 3; // Pool C (BTC Mining) dedicated qRWA holder leg
+
+// QUTIL SendToManyV1 batch payout settings
+constexpr uint32 QRWA_QUTIL_BATCH_SIZE = 25;
+constexpr sint64 QRWA_QUTIL_FEE = QUTIL_STM1_INVOCATION_FEE; // 10 QU per batch
+
+// Ring buffer for tracking QUTIL batch transfers (queryable via fn 16)
+constexpr uint64 QRWA_BATCH_RING_SIZE = 256;  // Must be a power of 2
+constexpr uint64 QRWA_BATCH_PAGE_SIZE = 64;
 
 
 /***************************************************/
@@ -141,18 +147,7 @@ struct QRWA : public ContractBase
         QRWAGovParams params; // The actual proposal data
     };
 
-    // Represents a poll to release assets from the treasury or dividend pool.
-    struct AssetReleaseProposal
-    {
-        uint64 proposalId;
-        id proposalName;
-        Asset asset;
-        uint64 amount;
-        id destination;
-        uint64 status; // 0=Empty, 1=Active, 2=Passed_Executed, 3=Failed, 4=Passed_Failed_Execution
-        uint64 votesYes; // Final score, count at END_EPOCH
-        uint64 votesNo; // Final score, count at END_EPOCH
-    };
+
 
     // Logger for general contract events.
     struct QRWALogger
@@ -178,6 +173,17 @@ struct QRWA : public ContractBase
         uint8 _pad0;
     };
 
+    // Single entry in the QUTIL batch transfer ring buffer (mBatchTransfersPoolA).
+    struct QRWABatchTransferEntry
+    {
+        uint64 totalAmount;     // Sum of all payout amounts in this batch (excl. fee)
+        uint64 fee;             // QUTIL fee paid (10 QU)
+        uint32 tick;            // Network tick when batch was fired
+        uint16 epoch;           // Epoch of the batch
+        uint8 recipientCount;   // Number of recipients in this batch (1-25)
+        uint8 status;           // 0 = success, 1 = failed
+    };
+
 protected:
     Asset mQmineAsset;
 
@@ -201,12 +207,7 @@ protected:
     uint64 mCurrentGovProposalId;
     uint64 mNewGovPollsThisEpoch;
 
-    // Asset Release Polls
-    Array<AssetReleaseProposal, QRWA_MAX_ASSET_POLLS> mAssetPolls;
-    HashMap<id, bit_64, QRWA_MAX_QMINE_HOLDERS> mAssetProposalVoterMap; // (Voter -> bitfield of poll slot indices)
-    HashMap<id, bit_64, QRWA_MAX_QMINE_HOLDERS> mAssetVoteOptions; // (Voter -> bitfield of options (0=No, 1=Yes))
-    uint64 mCurrentAssetProposalId; // Counter for creating new proposal ID
-    uint64 mNewAssetPollsThisEpoch;
+
 
     // Treasury & Asset Release
     uint64 mTreasuryBalance; // QMINE token balance holds by SC
@@ -251,6 +252,10 @@ protected:
     uint16 mPayoutsPoolBNextIdx;
     Array<QRWAPayoutEntry, QRWA_PAYOUT_RING_SIZE> mPayoutsPoolC;   // Pool C: QMINE + dedicated qRWA payouts
     uint16 mPayoutsPoolCNextIdx;
+
+    // QUTIL batch transfer ring buffer (Pool A only)
+    Array<QRWABatchTransferEntry, QRWA_BATCH_RING_SIZE> mBatchTransfersPoolA;
+    uint16 mBatchTransfersPoolANextIdx;
 
 public:
     /***************************************************/
@@ -485,236 +490,7 @@ public:
     }
 
 
-    // Governance: Asset Release
-    struct CreateAssetReleasePoll_input
-    {
-        id proposalName;
-        Asset asset;
-        uint64 amount;
-        id destination;
-    };
-    struct CreateAssetReleasePoll_output
-    {
-        uint64 status;
-        uint64 proposalId;
-    };
-    struct CreateAssetReleasePoll_locals
-    {
-        uint64 newPollIndex;
-        AssetReleaseProposal newPoll;
-        QRWALogger logger;
-    };
-    PUBLIC_PROCEDURE_WITH_LOCALS(CreateAssetReleasePoll)
-    {
-        output.status = QRWA_STATUS_FAILURE_GENERAL;
-        output.proposalId = -1;
-        locals.logger.contractId = CONTRACT_INDEX;
-        locals.logger.logType = QRWA_LOG_TYPE_ASSET_POLL_CREATED;
-        locals.logger.primaryId = qpi.invocator();
-        locals.logger.valueA = 0;
 
-        if (qpi.invocator() != state.mCurrentGovParams.mAdminAddress)
-        {
-            output.status = QRWA_STATUS_FAILURE_NOT_AUTHORIZED;
-            locals.logger.logType = QRWA_LOG_TYPE_ERROR;
-            locals.logger.valueB = output.status;
-            LOG_INFO(locals.logger);
-            if (qpi.invocationReward() > 0)
-            {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
-            }
-            return;
-        }
-
-        // Check poll limit
-        if (state.mNewAssetPollsThisEpoch >= QRWA_MAX_NEW_ASSET_POLLS_PER_EPOCH)
-        {
-            output.status = QRWA_STATUS_FAILURE_LIMIT_REACHED;
-            locals.logger.logType = QRWA_LOG_TYPE_ERROR;
-            locals.logger.valueB = output.status;
-            LOG_INFO(locals.logger);
-            if (qpi.invocationReward() > 0)
-            {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
-            }
-            return;
-        }
-
-        if (input.amount == 0 || input.destination == NULL_ID || input.asset.issuer == NULL_ID)
-        {
-            output.status = QRWA_STATUS_FAILURE_INVALID_INPUT;
-            locals.logger.logType = QRWA_LOG_TYPE_ERROR;
-            locals.logger.valueB = output.status;
-            LOG_INFO(locals.logger);
-            if (qpi.invocationReward() > 0)
-            {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
-            }
-            return;
-        }
-
-        // Only QMINE treasury releases are allowed via vote.
-        // SC shares (general assets) are permanently locked.
-        if (input.asset.issuer != state.mQmineAsset.issuer || input.asset.assetName != state.mQmineAsset.assetName)
-        {
-            output.status = QRWA_STATUS_FAILURE_INVALID_INPUT;
-            locals.logger.logType = QRWA_LOG_TYPE_ERROR;
-            locals.logger.valueB = output.status;
-            LOG_INFO(locals.logger);
-            if (qpi.invocationReward() > 0)
-            {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
-            }
-            return;
-        }
-
-        locals.newPollIndex = mod(state.mCurrentAssetProposalId, QRWA_MAX_ASSET_POLLS);
-
-        // Create and store the new poll, overwriting the oldest one
-        locals.newPoll.proposalId = state.mCurrentAssetProposalId;
-        locals.newPoll.proposalName = input.proposalName;
-        locals.newPoll.asset = input.asset;
-        locals.newPoll.amount = input.amount;
-        locals.newPoll.destination = input.destination;
-        locals.newPoll.status = QRWA_POLL_STATUS_ACTIVE;
-        locals.newPoll.votesYes = 0;
-        locals.newPoll.votesNo = 0;
-
-        state.mAssetPolls.set(locals.newPollIndex, locals.newPoll);
-
-        output.proposalId = state.mCurrentAssetProposalId;
-        output.status = QRWA_STATUS_SUCCESS;
-        state.mCurrentAssetProposalId++; // Increment for the next proposal
-        state.mNewAssetPollsThisEpoch++;
-
-        locals.logger.valueA = output.proposalId;
-        locals.logger.valueB = output.status;
-        LOG_INFO(locals.logger);
-        if (qpi.invocationReward() > 0)
-        {
-            qpi.transfer(qpi.invocator(), qpi.invocationReward());
-        }
-    }
-
-
-    struct VoteAssetRelease_input
-    {
-        uint64 proposalId;
-        uint64 option; /* 0=No, 1=Yes */
-    };
-    struct VoteAssetRelease_output
-    {
-        uint64 status;
-    };
-    struct VoteAssetRelease_locals
-    {
-        uint64 currentBalance;
-        AssetReleaseProposal poll;
-        uint64 pollIndex;
-        QRWALogger logger;
-        uint64 foundPoll;
-        bit_64 voterBitfield;
-        bit_64 voterOptions;
-        sint64 rawBalance;
-    };
-    PUBLIC_PROCEDURE_WITH_LOCALS(VoteAssetRelease)
-    {
-        output.status = QRWA_STATUS_FAILURE_GENERAL;
-        locals.logger.contractId = CONTRACT_INDEX;
-        locals.logger.logType = QRWA_LOG_TYPE_ASSET_VOTE;
-        locals.logger.primaryId = qpi.invocator();
-        locals.logger.valueA = input.proposalId;
-        locals.logger.valueB = input.option;
-
-        if (input.option > 1)
-        {
-            output.status = QRWA_STATUS_FAILURE_INVALID_INPUT;
-            locals.logger.logType = QRWA_LOG_TYPE_ERROR;
-            locals.logger.valueB = output.status; // Overwrite valueB with status
-            LOG_INFO(locals.logger);
-            if (qpi.invocationReward() > 0)
-            {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
-            }
-            return;
-        }
-
-        // Get voter's current QMINE balance
-        locals.rawBalance = qpi.numberOfShares(state.mQmineAsset, AssetOwnershipSelect::byOwner(qpi.invocator()), AssetPossessionSelect::byPossessor(qpi.invocator()));
-        locals.currentBalance = (locals.rawBalance > 0) ? static_cast<uint64>(locals.rawBalance) : 0;
-
-
-        if (locals.currentBalance <= 0)
-        {
-            output.status = QRWA_STATUS_FAILURE_NOT_AUTHORIZED; // Not a QMINE holder or balance is zero
-            locals.logger.logType = QRWA_LOG_TYPE_ERROR;
-            locals.logger.valueB = output.status;
-            LOG_INFO(locals.logger);
-            if (qpi.invocationReward() > 0)
-            {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
-            }
-            return;
-        }
-
-        // Find the poll
-        locals.pollIndex = mod(input.proposalId, QRWA_MAX_ASSET_POLLS);
-        locals.poll = state.mAssetPolls.get(locals.pollIndex);
-
-        if (locals.poll.proposalId != input.proposalId)
-        {
-            locals.foundPoll = 0;
-        }
-        else {
-            locals.foundPoll = 1;
-        }
-
-        if (locals.foundPoll == 0)
-        {
-            output.status = QRWA_STATUS_FAILURE_NOT_FOUND;
-            locals.logger.logType = QRWA_LOG_TYPE_ERROR;
-            locals.logger.valueB = output.status;
-            LOG_INFO(locals.logger);
-            if (qpi.invocationReward() > 0)
-            {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
-            }
-            return;
-        }
-
-        if (locals.poll.status != QRWA_POLL_STATUS_ACTIVE) // Check if poll is active
-        {
-            output.status = QRWA_STATUS_FAILURE_POLL_INACTIVE;
-            locals.logger.logType = QRWA_LOG_TYPE_ERROR;
-            locals.logger.valueB = output.status;
-            LOG_INFO(locals.logger);
-            if (qpi.invocationReward() > 0)
-            {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
-            }
-            return;
-        }
-
-        // Now process the new vote
-        state.mAssetProposalVoterMap.get(qpi.invocator(), locals.voterBitfield); // Get or default (all 0s)
-        state.mAssetVoteOptions.get(qpi.invocator(), locals.voterOptions);
-
-        // Record vote
-        locals.voterBitfield.set(locals.pollIndex, 1);
-        locals.voterOptions.set(locals.pollIndex, (input.option == 1) ? 1 : 0);
-
-        // Update voter's maps
-        state.mAssetProposalVoterMap.set(qpi.invocator(), locals.voterBitfield);
-        state.mAssetVoteOptions.set(qpi.invocator(), locals.voterOptions);
-
-        output.status = QRWA_STATUS_SUCCESS;
-        locals.logger.valueB = output.status; // Log final status
-        LOG_INFO(locals.logger);
-        if (qpi.invocationReward() > 0)
-        {
-            qpi.transfer(qpi.invocator(), qpi.invocationReward());
-        }
-    }
 
     // deposit general assets
     struct DepositGeneralAsset_input
@@ -1021,37 +797,7 @@ public:
         }
     }
 
-    // Governance: Asset Release
-    struct GetAssetReleasePoll_input
-    {
-        uint64 proposalId;
-    };
-    struct GetAssetReleasePoll_output
-    {
-        AssetReleaseProposal proposal;
-        uint64 status; // 0=NotFound, 1=Found
-    };
-    struct GetAssetReleasePoll_locals
-    {
-        uint64 pollIndex;
-    };
-    PUBLIC_FUNCTION_WITH_LOCALS(GetAssetReleasePoll)
-    {
-        output.status = QRWA_STATUS_FAILURE_NOT_FOUND;
 
-        locals.pollIndex = mod(input.proposalId, QRWA_MAX_ASSET_POLLS);
-        output.proposal = state.mAssetPolls.get(locals.pollIndex);
-
-        if (output.proposal.proposalId == input.proposalId)
-        {
-            output.status = QRWA_STATUS_SUCCESS;
-        }
-        else
-        {
-            // Clear output if not the poll we're looking for
-            setMemory(output.proposal, 0);
-        }
-    }
 
     // Balances & Info
     struct GetTreasuryBalance_input {};
@@ -1121,30 +867,7 @@ public:
         output.fundraisingAddress = state.mFundraisingAddress;
     }
 
-    struct GetActiveAssetReleasePollIds_input {};
 
-    struct GetActiveAssetReleasePollIds_output
-    {
-        uint64 count;
-        Array<uint64, QRWA_MAX_ASSET_POLLS> ids;
-    };
-
-    struct GetActiveAssetReleasePollIds_locals
-    {
-        uint64 i;
-    };
-    PUBLIC_FUNCTION_WITH_LOCALS(GetActiveAssetReleasePollIds)
-    {
-        output.count = 0;
-        for (locals.i = 0; locals.i < QRWA_MAX_ASSET_POLLS; locals.i++)
-        {
-            if (state.mAssetPolls.get(locals.i).status == QRWA_POLL_STATUS_ACTIVE)
-            {
-                output.ids.set(output.count, state.mAssetPolls.get(locals.i).proposalId);
-                output.count++;
-            }
-        }
-    }
 
     struct GetActiveGovPollIds_input {};
     struct GetActiveGovPollIds_output
@@ -1388,6 +1111,41 @@ public:
         output.returnedCount = (uint16)locals.count;
     }
 
+    // GetBatchTransfersPoolA (fn 16): QUTIL batch transfer log for Pool A
+    struct GetBatchTransfersPoolA_input
+    {
+        uint16 page; // 0 = newest entries
+    };
+    struct GetBatchTransfersPoolA_output
+    {
+        QRWABatchTransferEntry batches[QRWA_BATCH_PAGE_SIZE];
+        uint16 nextIdx;
+        uint16 returnedCount;
+        uint16 page;
+        uint16 totalPages;
+    };
+    struct GetBatchTransfersPoolA_locals
+    {
+        uint64 i;
+        uint64 ringIdx;
+        uint64 count;
+    };
+    PUBLIC_FUNCTION_WITH_LOCALS(GetBatchTransfersPoolA)
+    {
+        output.nextIdx = state.mBatchTransfersPoolANextIdx;
+        output.page = input.page;
+        output.totalPages = (uint16)((QRWA_BATCH_RING_SIZE + QRWA_BATCH_PAGE_SIZE - 1) / QRWA_BATCH_PAGE_SIZE);
+        uint64 startOffset = (uint64)input.page * QRWA_BATCH_PAGE_SIZE;
+        locals.count = 0;
+        for (locals.i = 0; locals.i < QRWA_BATCH_PAGE_SIZE && (startOffset + locals.i) < QRWA_BATCH_RING_SIZE; locals.i++)
+        {
+            locals.ringIdx = ((uint64)state.mBatchTransfersPoolANextIdx - 1 - startOffset - locals.i + QRWA_BATCH_RING_SIZE) & (QRWA_BATCH_RING_SIZE - 1);
+            output.batches[locals.count] = state.mBatchTransfersPoolA.get(locals.ringIdx);
+            locals.count++;
+        }
+        output.returnedCount = (uint16)locals.count;
+    }
+
     /***************************************************/
     /***************** SYSTEM PROCEDURES ***************/
     /***************************************************/
@@ -1406,7 +1164,6 @@ public:
             _R, _V, _Z, _B, _T, _Y, _K, _G
         );
         state.mTreasuryBalance = 0;
-        state.mCurrentAssetProposalId = 0;
         setMemory(state.mLastPayoutTime, 0);
         state.mLastPayoutTick = 0;
 
@@ -1449,9 +1206,7 @@ public:
         state.mCurrentGovParams.reinvestmentPercent = 100;
 
         state.mCurrentGovProposalId = 0;
-        state.mCurrentAssetProposalId = 0;
         state.mNewGovPollsThisEpoch = 0;
-        state.mNewAssetPollsThisEpoch = 0;
 
         // Initialize revenue pools
         state.mRevenuePoolA = 0;
@@ -1506,10 +1261,7 @@ public:
         state.mGeneralAssetBalances.reset();
         state.mScDividendTracker.reset();
         state.mShareholderVoteMap.reset();
-        state.mAssetProposalVoterMap.reset();
-        state.mAssetVoteOptions.reset();
 
-        setMemory(state.mAssetPolls, 0);
         setMemory(state.mGovPolls, 0);
     }
 
@@ -1565,7 +1317,6 @@ public:
 
         // Reset new poll counters
         state.mNewGovPollsThisEpoch = 0;
-        state.mNewAssetPollsThisEpoch = 0;
 
         state.mEndEpochBalances.reset();
 
@@ -1630,9 +1381,6 @@ public:
         uint64 votingPower;
         uint64 proposalIndex;
         uint64 currentScore;
-        bit_64 voterBitfield;
-        bit_64 voterOptions;
-        uint64 i_asset;
 
         // Gov Params Voting
         uint64 i;
@@ -1643,34 +1391,12 @@ public:
         uint64 govPassed;
         uint64 quorumThreshold;
 
-        // Asset Release Voting
-        uint64 pollIndex;
-        AssetReleaseProposal poll;
-        uint64 yesVotes;
-        uint64 noVotes;
-        uint64 totalVotes;
-        uint64 transferSuccess;
-        sint64 transferResult;
-        uint64 currentAssetBalance;
-        Array<uint64, QRWA_MAX_ASSET_POLLS> assetPollVotesYes;
-        Array<uint64, QRWA_MAX_ASSET_POLLS> assetPollVotesNo;
-        uint64 assetPassed;
-
-        sint64 releaseFeeResult; // For releaseShares fee
-
-        uint64 ownershipTransferred;
-        uint64 managementTransferred;
-        uint64 feePaid;
-        uint64 sufficientFunds;
-
         QRWALogger logger;
         uint64 epoch;
 
         sint64 copyIndex;
         id copyHolder;
         uint64 copyBalance;
-
-        QRWAAsset wrapper;
 
         QRWAGovProposal govPoll;
 
@@ -1822,204 +1548,6 @@ public:
         // Reset governance voter map for the next epoch
         state.mShareholderVoteMap.reset();
 
-        // --- Process Asset Release Voting ---
-        locals.assetPollVotesYes.setAll(0);
-        locals.assetPollVotesNo.setAll(0);
-
-        locals.iterIndex = NULL_INDEX;
-        while (true)
-        {
-            locals.iterIndex = state.mAssetProposalVoterMap.nextElementIndex(locals.iterIndex);
-            if (locals.iterIndex == NULL_INDEX)
-            {
-                break;
-            }
-
-            locals.iterVoter = state.mAssetProposalVoterMap.key(locals.iterIndex);
-
-            // Get true voting power
-            locals.beginBalance = 0;
-            locals.endBalance = 0;
-            state.mBeginEpochBalances.get(locals.iterVoter, locals.beginBalance);
-            state.mEndEpochBalances.get(locals.iterVoter, locals.endBalance);
-            locals.votingPower = (locals.beginBalance < locals.endBalance) ? locals.beginBalance : locals.endBalance; // min(begin, end)
-
-            if (locals.votingPower > 0) // Apply voting power
-            {
-                state.mAssetProposalVoterMap.get(locals.iterVoter, locals.voterBitfield);
-                state.mAssetVoteOptions.get(locals.iterVoter, locals.voterOptions);
-
-                for (locals.i_asset = 0; locals.i_asset < QRWA_MAX_ASSET_POLLS; locals.i_asset++)
-                {
-                    if (state.mAssetPolls.get(locals.i_asset).status == QRWA_POLL_STATUS_ACTIVE &&
-                        locals.voterBitfield.get(locals.i_asset) == 1)
-                    {
-                        if (locals.voterOptions.get(locals.i_asset) == 1) // Voted Yes
-                        {
-                            locals.yesVotes = locals.assetPollVotesYes.get(locals.i_asset);
-                            locals.assetPollVotesYes.set(locals.i_asset, sadd(locals.yesVotes, locals.votingPower));
-                        }
-                        else // Voted No
-                        {
-                            locals.noVotes = locals.assetPollVotesNo.get(locals.i_asset);
-                            locals.assetPollVotesNo.set(locals.i_asset, sadd(locals.noVotes, locals.votingPower));
-                        }
-                    }
-                }
-            }
-        }
-
-        // Finalize Asset Polls
-        for (locals.pollIndex = 0; locals.pollIndex < QRWA_MAX_ASSET_POLLS; ++locals.pollIndex)
-        {
-            locals.poll = state.mAssetPolls.get(locals.pollIndex);
-
-            if (locals.poll.status == QRWA_POLL_STATUS_ACTIVE)
-            {
-                locals.yesVotes = locals.assetPollVotesYes.get(locals.pollIndex);
-                locals.noVotes = locals.assetPollVotesNo.get(locals.pollIndex);
-
-                // Store final scores in the poll struct
-                locals.poll.votesYes = locals.yesVotes;
-                locals.poll.votesNo = locals.noVotes;
-
-                locals.ownershipTransferred = 0;
-                locals.managementTransferred = 0;
-                locals.feePaid = 0;
-                locals.sufficientFunds = 0;
-
-
-                if (locals.yesVotes > locals.noVotes) // Simple majority: YES > NO
-                {
-                    // Check if asset is QMINE treasury
-                    if (locals.poll.asset.issuer == state.mQmineAsset.issuer && locals.poll.asset.assetName == state.mQmineAsset.assetName)
-                    {
-                        // Release from treasury
-                        if (state.mTreasuryBalance >= locals.poll.amount)
-                        {
-                            locals.sufficientFunds = 1;
-                            locals.transferResult = qpi.transferShareOwnershipAndPossession(
-                                state.mQmineAsset.assetName, state.mQmineAsset.issuer,
-                                SELF, SELF, locals.poll.amount, locals.poll.destination);
-
-                            if (locals.transferResult >= 0) // ownership transfer succeeded
-                            {
-                                locals.ownershipTransferred = 1;
-                                // Decrement internal balance
-                                state.mTreasuryBalance = (state.mTreasuryBalance > locals.poll.amount) ? (state.mTreasuryBalance - locals.poll.amount) : 0;
-
-                                if (state.mRevenuePoolA >= QRWA_RELEASE_MANAGEMENT_FEE)
-                                {
-                                    // Release management rights from this SC to QX
-                                    locals.releaseFeeResult = qpi.releaseShares(
-                                        locals.poll.asset,
-                                        locals.poll.destination, // new owner
-                                        locals.poll.destination, // new possessor
-                                        locals.poll.amount,
-                                        QX_CONTRACT_INDEX,
-                                        QX_CONTRACT_INDEX,
-                                        QRWA_RELEASE_MANAGEMENT_FEE
-                                    );
-
-                                    if (locals.releaseFeeResult >= 0) // management transfer succeeded
-                                    {
-                                        locals.managementTransferred = 1;
-                                        locals.feePaid = 1;
-                                        state.mRevenuePoolA = (state.mRevenuePoolA > (uint64)locals.releaseFeeResult) ? (state.mRevenuePoolA - (uint64)locals.releaseFeeResult) : 0;
-                                    }
-                                    // else: Management transfer failed (shares are "stuck").
-                                    // The destination ID still owns the transferred asset, but the SC management is currently under qRWA.
-                                    // The destination ID must use revokeAssetManagementRights to transfer the asset's SC management to QX
-                                }
-                            }
-                        }
-                    }
-                    else // Asset is from mGeneralAssetBalances
-                    {
-                        locals.wrapper.setFrom(locals.poll.asset);
-                        if (state.mGeneralAssetBalances.get(locals.wrapper, locals.currentAssetBalance))
-                        {
-                            if (locals.currentAssetBalance >= locals.poll.amount)
-                            {
-                                locals.sufficientFunds = 1;
-                                // Ownership Transfer
-                                locals.transferResult = qpi.transferShareOwnershipAndPossession(
-                                    locals.poll.asset.assetName, locals.poll.asset.issuer,
-                                    SELF, SELF, locals.poll.amount, locals.poll.destination);
-
-                                if (locals.transferResult >= 0) // Ownership transfer tucceeded
-                                {
-                                    locals.ownershipTransferred = 1;
-                                    // Decrement internal balance
-                                    locals.currentAssetBalance = (locals.currentAssetBalance > locals.poll.amount) ? (locals.currentAssetBalance - locals.poll.amount) : 0;
-                                    state.mGeneralAssetBalances.set(locals.wrapper, locals.currentAssetBalance);
-
-                                    if (state.mRevenuePoolA >= QRWA_RELEASE_MANAGEMENT_FEE)
-                                    {
-                                        // Management Transfer
-                                        locals.releaseFeeResult = qpi.releaseShares(
-                                            locals.poll.asset,
-                                            locals.poll.destination, // new owner
-                                            locals.poll.destination, // new possessor
-                                            locals.poll.amount,
-                                            QX_CONTRACT_INDEX,
-                                            QX_CONTRACT_INDEX,
-                                            QRWA_RELEASE_MANAGEMENT_FEE
-                                        );
-
-                                        if (locals.releaseFeeResult >= 0) // management transfer succeeded
-                                        {
-                                            locals.managementTransferred = 1;
-                                            locals.feePaid = 1;
-                                            state.mRevenuePoolA = (state.mRevenuePoolA > (uint64)locals.releaseFeeResult) ? (state.mRevenuePoolA - (uint64)locals.releaseFeeResult) : 0;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    locals.transferSuccess = locals.ownershipTransferred & locals.managementTransferred & locals.feePaid;
-                    if (locals.transferSuccess == 1) // All steps succeeded
-                    {
-                        locals.logger.logType = QRWA_LOG_TYPE_ASSET_POLL_EXECUTED;
-                        locals.logger.valueB = QRWA_STATUS_SUCCESS;
-                        locals.poll.status = QRWA_POLL_STATUS_PASSED_EXECUTED;
-                    }
-                    else
-                    {
-                        locals.logger.logType = QRWA_LOG_TYPE_ERROR;
-                        if (locals.sufficientFunds == 0)
-                        {
-                            locals.logger.valueB = QRWA_STATUS_FAILURE_INSUFFICIENT_BALANCE;
-                        }
-                        else if (locals.ownershipTransferred == 0)
-                        {
-                            locals.logger.valueB = QRWA_STATUS_FAILURE_TRANSFER_FAILED;
-                        }
-                        else
-                        {
-                            // This is the stuck shares case
-                            locals.logger.valueB = QRWA_STATUS_FAILURE_TRANSFER_FAILED;
-                        }
-                        locals.poll.status = QRWA_POLL_STATUS_PASSED_FAILED_EXECUTION;
-                    }
-                    locals.logger.contractId = CONTRACT_INDEX;
-                    locals.logger.primaryId = locals.poll.destination;
-                    locals.logger.valueA = locals.poll.proposalId;
-                    LOG_INFO(locals.logger);
-                }
-                else // Vote failed (simple majority not reached)
-                {
-                    locals.poll.status = QRWA_POLL_STATUS_FAILED_VOTE;
-                }
-                state.mAssetPolls.set(locals.pollIndex, locals.poll);
-            }
-        }
-        // Reset voter tracking map for asset polls
-        state.mAssetProposalVoterMap.reset();
-        state.mAssetVoteOptions.reset();
-
         // Copy the finalized epoch snapshots to the payout buffers
         state.mPayoutBeginBalances.reset();
         state.mPayoutEndBalances.reset();
@@ -2105,6 +1633,15 @@ public:
         QRWAPayoutEntry payoutEntry;
         AssetPossessionIterator qrwaIter;
         Asset qrwaAsset;
+
+        // QUTIL batch payout fields (Pool A QMINE)
+        QUTIL::SendToManyV1_input stm1Input;
+        QUTIL::SendToManyV1_output stm1Output;
+        uint32 batchCount;      // current slot 0..24
+        uint64 batchTotal;      // sum of amounts in current batch
+        uint32 batchFlushIdx;   // loop var for flushing ring buffer
+        QRWAPayoutEntry pendingEntries[QRWA_QUTIL_BATCH_SIZE];
+        QRWABatchTransferEntry batchEntry; // For writing to batch transfer ring buffer
     };
     END_TICK_WITH_LOCALS()
     {
@@ -2214,6 +1751,11 @@ public:
 
                 if ((locals.poolAQmine_128 > (uint128)0 || locals.poolBQmine_128 > (uint128)0 || locals.poolCQmine_128 > (uint128)0) && state.mPayoutTotalQmineBegin > 0)
                 {
+                    // Initialize QUTIL batch for Pool A
+                    setMemory(locals.stm1Input, 0);
+                    locals.batchCount = 0;
+                    locals.batchTotal = 0;
+
                     locals.qminePayoutIndex = NULL_INDEX;
 
                     while (true)
@@ -2242,7 +1784,7 @@ public:
 
                         if (locals.eligibleBalance > 0)
                         {
-                            // ── Pool A QMINE payout ──
+                            // ── Pool A QMINE payout — accumulate into QUTIL batch ──
                             if (locals.poolAQmine_128 > (uint128)0)
                             {
                                 locals.scaledPayout_128 = (uint128)locals.eligibleBalance * (uint128)state.mPoolAQmineDividend;
@@ -2254,19 +1796,60 @@ public:
                                 if (locals.eligiblePayout_128 > (uint128)0 && locals.eligiblePayout_128.high == 0)
                                 {
                                     locals.payout_u64 = locals.eligiblePayout_128.low;
-                                    if (locals.payout_u64 > 0 && qpi.transfer(locals.holder, (sint64)locals.payout_u64) >= 0)
+                                    if (locals.payout_u64 > 0)
                                     {
+                                        // Add to QUTIL batch
+                                        ((id*)&locals.stm1Input.dst0)[locals.batchCount] = locals.holder;
+                                        ((sint64*)&locals.stm1Input.amt0)[locals.batchCount] = (sint64)locals.payout_u64;
+                                        locals.pendingEntries[locals.batchCount].recipient = locals.holder;
+                                        locals.pendingEntries[locals.batchCount].amount = locals.payout_u64;
+                                        locals.pendingEntries[locals.batchCount].qmineHolding = locals.eligibleBalance;
+                                        locals.pendingEntries[locals.batchCount].qrwaHolding = 0;
+                                        locals.pendingEntries[locals.batchCount].tick = qpi.tick();
+                                        locals.pendingEntries[locals.batchCount].epoch = qpi.epoch();
+                                        locals.pendingEntries[locals.batchCount].payoutType = QRWA_PAYOUT_TYPE_QMINE_HOLDER;
+                                        locals.batchTotal = sadd(locals.batchTotal, locals.payout_u64);
                                         locals.poolAQmine_128 -= locals.eligiblePayout_128;
-                                        state.mTotalPoolADistributed = sadd(state.mTotalPoolADistributed, locals.payout_u64);
-                                        locals.payoutEntry.recipient = locals.holder;
-                                        locals.payoutEntry.amount = locals.payout_u64;
-                                        locals.payoutEntry.qmineHolding = locals.eligibleBalance;
-                                        locals.payoutEntry.qrwaHolding = 0;
-                                        locals.payoutEntry.tick = qpi.tick();
-                                        locals.payoutEntry.epoch = qpi.epoch();
-                                        locals.payoutEntry.payoutType = QRWA_PAYOUT_TYPE_QMINE_HOLDER;
-                                        state.mPayoutsPoolA.set(state.mPayoutsPoolANextIdx, locals.payoutEntry);
-                                        state.mPayoutsPoolANextIdx = (state.mPayoutsPoolANextIdx + 1) & (QRWA_PAYOUT_RING_SIZE - 1);
+                                        locals.batchCount++;
+
+                                        // Flush batch when full
+                                        if (locals.batchCount == QRWA_QUTIL_BATCH_SIZE)
+                                        {
+                                            {
+                                                INVOKE_OTHER_CONTRACT_PROCEDURE(QUTIL, SendToManyV1, locals.stm1Input, locals.stm1Output, (sint64)(locals.batchTotal + QRWA_QUTIL_FEE));
+                                                locals.batchEntry.totalAmount = locals.batchTotal;
+                                                locals.batchEntry.fee = (uint64)QRWA_QUTIL_FEE;
+                                                locals.batchEntry.tick = qpi.tick();
+                                                locals.batchEntry.epoch = qpi.epoch();
+                                                locals.batchEntry.recipientCount = (uint8)locals.batchCount;
+                                                if (interContractCallError == NoCallError && locals.stm1Output.returnCode == 0)
+                                                {
+                                                    locals.batchEntry.status = 0;
+                                                    for (locals.batchFlushIdx = 0; locals.batchFlushIdx < locals.batchCount; locals.batchFlushIdx++)
+                                                    {
+                                                        state.mTotalPoolADistributed = sadd(state.mTotalPoolADistributed, locals.pendingEntries[locals.batchFlushIdx].amount);
+                                                        state.mPayoutsPoolA.set(state.mPayoutsPoolANextIdx, locals.pendingEntries[locals.batchFlushIdx]);
+                                                        state.mPayoutsPoolANextIdx = (state.mPayoutsPoolANextIdx + 1) & (QRWA_PAYOUT_RING_SIZE - 1);
+                                                    }
+                                                    // Deduct QUTIL batch fee from pool budget
+                                                    locals.poolAQmine_128 -= (uint128)QRWA_QUTIL_FEE;
+                                                }
+                                                else
+                                                {
+                                                    locals.batchEntry.status = 1;
+                                                    // Batch failed — add amounts back to pool for next payout cycle
+                                                    for (locals.batchFlushIdx = 0; locals.batchFlushIdx < locals.batchCount; locals.batchFlushIdx++)
+                                                    {
+                                                        locals.poolAQmine_128 += (uint128)locals.pendingEntries[locals.batchFlushIdx].amount;
+                                                    }
+                                                }
+                                                state.mBatchTransfersPoolA.set(state.mBatchTransfersPoolANextIdx, locals.batchEntry);
+                                                state.mBatchTransfersPoolANextIdx = (state.mBatchTransfersPoolANextIdx + 1) & (QRWA_BATCH_RING_SIZE - 1);
+                                            }
+                                            setMemory(locals.stm1Input, 0);
+                                            locals.batchCount = 0;
+                                            locals.batchTotal = 0;
+                                        }
                                     }
                                 }
                             }
@@ -2329,6 +1912,44 @@ public:
                                 }
                             }
                         }
+                    }
+
+                    // Flush remaining partial batch for Pool A
+                    if (locals.batchCount > 0)
+                    {
+                        {
+                            INVOKE_OTHER_CONTRACT_PROCEDURE(QUTIL, SendToManyV1, locals.stm1Input, locals.stm1Output, (sint64)(locals.batchTotal + QRWA_QUTIL_FEE));
+                            locals.batchEntry.totalAmount = locals.batchTotal;
+                            locals.batchEntry.fee = (uint64)QRWA_QUTIL_FEE;
+                            locals.batchEntry.tick = qpi.tick();
+                            locals.batchEntry.epoch = qpi.epoch();
+                            locals.batchEntry.recipientCount = (uint8)locals.batchCount;
+                            if (interContractCallError == NoCallError && locals.stm1Output.returnCode == 0)
+                            {
+                                locals.batchEntry.status = 0;
+                                for (locals.batchFlushIdx = 0; locals.batchFlushIdx < locals.batchCount; locals.batchFlushIdx++)
+                                {
+                                    state.mTotalPoolADistributed = sadd(state.mTotalPoolADistributed, locals.pendingEntries[locals.batchFlushIdx].amount);
+                                    state.mPayoutsPoolA.set(state.mPayoutsPoolANextIdx, locals.pendingEntries[locals.batchFlushIdx]);
+                                    state.mPayoutsPoolANextIdx = (state.mPayoutsPoolANextIdx + 1) & (QRWA_PAYOUT_RING_SIZE - 1);
+                                }
+                                // Deduct QUTIL batch fee from pool budget
+                                locals.poolAQmine_128 -= (uint128)QRWA_QUTIL_FEE;
+                            }
+                            else
+                            {
+                                locals.batchEntry.status = 1;
+                                // Batch failed — add amounts back to pool for next payout cycle
+                                for (locals.batchFlushIdx = 0; locals.batchFlushIdx < locals.batchCount; locals.batchFlushIdx++)
+                                {
+                                    locals.poolAQmine_128 += (uint128)locals.pendingEntries[locals.batchFlushIdx].amount;
+                                }
+                            }
+                            state.mBatchTransfersPoolA.set(state.mBatchTransfersPoolANextIdx, locals.batchEntry);
+                            state.mBatchTransfersPoolANextIdx = (state.mBatchTransfersPoolANextIdx + 1) & (QRWA_BATCH_RING_SIZE - 1);
+                        }
+                        locals.batchCount = 0;
+                        locals.batchTotal = 0;
                     }
 
                     // Dev payout: remainder of each pool's QMINE leg
@@ -2701,8 +2322,6 @@ public:
         // PROCEDURES
         REGISTER_USER_PROCEDURE(DonateToTreasury, 3);
         REGISTER_USER_PROCEDURE(VoteGovParams, 4);
-        REGISTER_USER_PROCEDURE(CreateAssetReleasePoll, 5);
-        REGISTER_USER_PROCEDURE(VoteAssetRelease, 6);
         REGISTER_USER_PROCEDURE(DepositGeneralAsset, 7);
         REGISTER_USER_PROCEDURE(RevokeAssetManagementRights, 8);
         REGISTER_USER_PROCEDURE(SetPoolARevenueAddress, 9);
@@ -2710,11 +2329,9 @@ public:
         // FUNCTIONS
         REGISTER_USER_FUNCTION(GetGovParams, 1);
         REGISTER_USER_FUNCTION(GetGovPoll, 2);
-        REGISTER_USER_FUNCTION(GetAssetReleasePoll, 3);
         REGISTER_USER_FUNCTION(GetTreasuryBalance, 4);
         REGISTER_USER_FUNCTION(GetDividendBalances, 5);
         REGISTER_USER_FUNCTION(GetTotalDistributed, 6);
-        REGISTER_USER_FUNCTION(GetActiveAssetReleasePollIds, 7);
         REGISTER_USER_FUNCTION(GetActiveGovPollIds, 8);
         REGISTER_USER_FUNCTION(GetGeneralAssetBalance, 9);
         REGISTER_USER_FUNCTION(GetGeneralAssets, 10);
@@ -2723,5 +2340,6 @@ public:
         REGISTER_USER_FUNCTION(GetPayoutsQrwa, 13);
         REGISTER_USER_FUNCTION(GetPayoutsDedicated, 14);
         REGISTER_USER_FUNCTION(GetScDividendTracking, 15);
+        REGISTER_USER_FUNCTION(GetBatchTransfersPoolA, 16);
     }
 };
