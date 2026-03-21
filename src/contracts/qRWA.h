@@ -26,7 +26,7 @@ constexpr uint64 QRWA_PAYOUT_DAY = FRIDAY;
 constexpr uint64 QRWA_PAYOUT_HOUR_POOL_A = 6;       // Qubic Mining  | Production: 12
 constexpr uint64 QRWA_PAYOUT_HOUR_POOL_B = 6;       // SC Assets     | Production: 14
 constexpr uint64 QRWA_PAYOUT_HOUR_POOL_C = 6;       // BTC Mining    | Production: 13
-constexpr uint64 QRWA_PAYOUT_MINUTE = 20;            // Trigger at :20 | Production: 0
+constexpr uint64 QRWA_PAYOUT_MINUTE = 45;            // Trigger at :45 | Production: 0
 constexpr uint64 QRWA_CHECK_DAY_OF_WEEK = 0;         // 0=any day (Testnet) | Production: 1
 constexpr uint64 QRWA_MIN_PAYOUT_INTERVAL_MS = 3600000ULL; // 1h (Testnet) | Production: 6 * 86400000ULL (6 days)
 
