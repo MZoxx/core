@@ -133,7 +133,9 @@ public:
     // manually reset the last payout time for testing.
     void resetPayoutTime()
     {
-        getState()->mLastPayoutTime = { 0, 0, 0, 0, 0, 0, 0 };
+        getState()->mLastPayoutTimePoolA = { 0, 0, 0, 0, 0, 0, 0 };
+        getState()->mLastPayoutTimePoolB = { 0, 0, 0, 0, 0, 0, 0 };
+        getState()->mLastPayoutTimePoolC = { 0, 0, 0, 0, 0, 0, 0 };
     }
 
     // QX/QUTIL Contract Wrappers
@@ -616,7 +618,7 @@ TEST(ContractQRWA, Payout_FullDistribution)
 
     // Set time to payout day
     etalonTick.year = 25; etalonTick.month = 11; etalonTick.day = 7; // A Friday
-    etalonTick.hour = 12; etalonTick.minute = 1; etalonTick.second = 0;
+    etalonTick.hour = QRWA_PAYOUT_HOUR_POOL_A; etalonTick.minute = QRWA_PAYOUT_MINUTE; etalonTick.second = 0;
 
     // Use helper to reset payout time
     qrwa.resetPayoutTime(); // Reset time to allow payout
@@ -746,7 +748,7 @@ TEST(ContractQRWA, Payout_SnapshotLogic)
 
     // Trigger Payout
     etalonTick.year = 25; etalonTick.month = 11; etalonTick.day = 14; // Next Friday
-    etalonTick.hour = 12; etalonTick.minute = 1; etalonTick.second = 0;
+    etalonTick.hour = QRWA_PAYOUT_HOUR_POOL_A; etalonTick.minute = QRWA_PAYOUT_MINUTE; etalonTick.second = 0;
     qrwa.resetPayoutTime();
     qrwa.endTick();
 
@@ -800,7 +802,7 @@ TEST(ContractQRWA, Payout_SnapshotLogic)
 
     // Trigger Payout 2
     etalonTick.year = 25; etalonTick.month = 11; etalonTick.day = 21; // Next Friday
-    etalonTick.hour = 12; etalonTick.minute = 1; etalonTick.second = 0;
+    etalonTick.hour = QRWA_PAYOUT_HOUR_POOL_A; etalonTick.minute = QRWA_PAYOUT_MINUTE; etalonTick.second = 0;
     qrwa.resetPayoutTime();
     qrwa.endTick();
 
@@ -875,7 +877,7 @@ TEST(ContractQRWA, Payout_FullDistribution2)
 
     // Set time to payout day
     etalonTick.year = 25; etalonTick.month = 11; etalonTick.day = 7; // A Friday
-    etalonTick.hour = 12; etalonTick.minute = 1; etalonTick.second = 0;
+    etalonTick.hour = QRWA_PAYOUT_HOUR_POOL_A; etalonTick.minute = QRWA_PAYOUT_MINUTE; etalonTick.second = 0;
 
     // Use helper to reset payout time
     qrwa.resetPayoutTime(); // Reset time to allow payout
@@ -949,8 +951,8 @@ TEST(ContractQRWA, FullScenario_DividendsAndGovernance)
     etalonTick.year = 25;   // 2025
     etalonTick.month = 11;  // November
     etalonTick.day = 7;     // 7th (Friday)
-    etalonTick.hour = 12;
-    etalonTick.minute = 1;
+    etalonTick.hour = QRWA_PAYOUT_HOUR_POOL_A;
+    etalonTick.minute = QRWA_PAYOUT_MINUTE;
     etalonTick.second = 0;
     etalonTick.millisecond = 0;
 
@@ -1521,7 +1523,7 @@ TEST(ContractQRWA, Payout_MultiContractManagement)
 
     // trigger Payout
     etalonTick.year = 25; etalonTick.month = 11; etalonTick.day = 7; // Friday
-    etalonTick.hour = 12; etalonTick.minute = 1; etalonTick.second = 0;
+    etalonTick.hour = QRWA_PAYOUT_HOUR_POOL_A; etalonTick.minute = QRWA_PAYOUT_MINUTE; etalonTick.second = 0;
     qrwa.resetPayoutTime();
 
     // snapshot balances for check
