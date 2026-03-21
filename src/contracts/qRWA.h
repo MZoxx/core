@@ -70,13 +70,7 @@ constexpr uint8 QRWA_PAYOUT_TYPE_QMINE_DEV       = 1; // Dev address gets reduce
 constexpr uint8 QRWA_PAYOUT_TYPE_QRWA_HOLDER     = 2; // qRWA shareholder (Pool B)
 constexpr uint8 QRWA_PAYOUT_TYPE_DEDICATED_QRWA  = 3; // Pool C (BTC Mining) dedicated qRWA holder leg
 
-// QUTIL SendToManyV1 batch payout settings
-constexpr uint32 QRWA_QUTIL_BATCH_SIZE = 25;
-constexpr sint64 QRWA_QUTIL_FEE = QUTIL_STM1_INVOCATION_FEE; // 10 QU per batch
 
-// Ring buffer for tracking QUTIL batch transfers (queryable via fn 16)
-constexpr uint64 QRWA_BATCH_RING_SIZE = 256;  // Must be a power of 2
-constexpr uint64 QRWA_BATCH_PAGE_SIZE = 64;
 
 
 /***************************************************/
@@ -173,20 +167,7 @@ struct QRWA : public ContractBase
         uint8 _pad0;
     };
 
-    // Single entry in the QUTIL batch transfer ring buffer (mBatchTransfersPoolA).
-    struct QRWABatchTransferEntry
-    {
-        uint64 totalAmount;     // Sum of all payout amounts in this batch (excl. fee)
-        uint64 fee;             // QUTIL fee paid (10 QU)
-        sint64 invocationReward; // Amount passed to INVOKE (batchTotal + fee)
-        uint32 tick;            // Network tick when batch was fired
-        sint32 returnCode;      // QUTIL SendToManyV1 returnCode (0 = success)
-        uint16 epoch;           // Epoch of the batch
-        uint8 recipientCount;   // Number of recipients in this batch (1-25)
-        uint8 status;           // 0 = success, 1 = interContractCallError, 2 = returnCode error
-        uint8 callError;        // InterContractCallError value (0=NoCallError, 1=ErrorState, 2=InsufficientFees, 3=AllocFailed)
-        uint8 _pad[3];          // Padding to 40 bytes
-    };
+
 
 protected:
     Asset mQmineAsset;
@@ -257,9 +238,7 @@ protected:
     Array<QRWAPayoutEntry, QRWA_PAYOUT_RING_SIZE> mPayoutsPoolC;   // Pool C: QMINE + dedicated qRWA payouts
     uint16 mPayoutsPoolCNextIdx;
 
-    // QUTIL batch transfer ring buffer (Pool A only)
-    Array<QRWABatchTransferEntry, QRWA_BATCH_RING_SIZE> mBatchTransfersPoolA;
-    uint16 mBatchTransfersPoolANextIdx;
+
 
 public:
     /***************************************************/
@@ -1115,40 +1094,7 @@ public:
         output.returnedCount = (uint16)locals.count;
     }
 
-    // GetBatchTransfersPoolA (fn 16): QUTIL batch transfer log for Pool A
-    struct GetBatchTransfersPoolA_input
-    {
-        uint16 page; // 0 = newest entries
-    };
-    struct GetBatchTransfersPoolA_output
-    {
-        QRWABatchTransferEntry batches[QRWA_BATCH_PAGE_SIZE];
-        uint16 nextIdx;
-        uint16 returnedCount;
-        uint16 page;
-        uint16 totalPages;
-    };
-    struct GetBatchTransfersPoolA_locals
-    {
-        uint64 i;
-        uint64 ringIdx;
-        uint64 count;
-    };
-    PUBLIC_FUNCTION_WITH_LOCALS(GetBatchTransfersPoolA)
-    {
-        output.nextIdx = state.mBatchTransfersPoolANextIdx;
-        output.page = input.page;
-        output.totalPages = (uint16)((QRWA_BATCH_RING_SIZE + QRWA_BATCH_PAGE_SIZE - 1) / QRWA_BATCH_PAGE_SIZE);
-        uint64 startOffset = (uint64)input.page * QRWA_BATCH_PAGE_SIZE;
-        locals.count = 0;
-        for (locals.i = 0; locals.i < QRWA_BATCH_PAGE_SIZE && (startOffset + locals.i) < QRWA_BATCH_RING_SIZE; locals.i++)
-        {
-            locals.ringIdx = ((uint64)state.mBatchTransfersPoolANextIdx - 1 - startOffset - locals.i + QRWA_BATCH_RING_SIZE) & (QRWA_BATCH_RING_SIZE - 1);
-            output.batches[locals.count] = state.mBatchTransfersPoolA.get(locals.ringIdx);
-            locals.count++;
-        }
-        output.returnedCount = (uint16)locals.count;
-    }
+
 
     /***************************************************/
     /***************** SYSTEM PROCEDURES ***************/
@@ -1280,43 +1226,45 @@ public:
     };
     BEGIN_EPOCH_WITH_LOCALS()
     {
-        // ── Migration: auto-initialize mPoolARevenueAddress if not set ──
-        // INITIALIZE only runs once at contract creation, so state variables added
-        // after deployment need to be initialized here on first epoch.
-        if (state.mPoolARevenueAddress == NULL_ID)
+        // ── One-time migrations (remove after epoch 202) ──
+        if (qpi.epoch() <= 202)
         {
-            // Testnet: IZNUAVRCTNYBQBSFYWBBPQUXASPCYDZYKFFULCEGLCFCEQPTLDTKZQMENKRN
-            // Production: change to QMINEQQXYBEGBHNSUPOUYDIQKZPCBPQIIHUUZMCPLBPCCAIARVZBTYKGFCWM
-            state.mPoolARevenueAddress = ID(
-                _I, _Z, _N, _U, _A, _V, _R, _C, _T, _N, _Y, _B, _Q, _B, _S, _F,
-                _Y, _W, _B, _B, _P, _Q, _U, _X, _A, _S, _P, _C, _Y, _D, _Z, _Y,
-                _K, _F, _F, _U, _L, _C, _E, _G, _L, _C, _F, _C, _E, _Q, _P, _T,
-                _L, _D, _T, _K, _Z, _Q, _M, _E
-            );
-        }
+            // auto-initialize mPoolARevenueAddress if not set
+            if (state.mPoolARevenueAddress == NULL_ID)
+            {
+                // Testnet: IZNUAVRCTNYBQBSFYWBBPQUXASPCYDZYKFFULCEGLCFCEQPTLDTKZQMENKRN
+                // Production: change to QMINEQQXYBEGBHNSUPOUYDIQKZPCBPQIIHUUZMCPLBPCCAIARVZBTYKGFCWM
+                state.mPoolARevenueAddress = ID(
+                    _I, _Z, _N, _U, _A, _V, _R, _C, _T, _N, _Y, _B, _Q, _B, _S, _F,
+                    _Y, _W, _B, _B, _P, _Q, _U, _X, _A, _S, _P, _C, _Y, _D, _Z, _Y,
+                    _K, _F, _F, _U, _L, _C, _E, _G, _L, _C, _F, _C, _E, _Q, _P, _T,
+                    _L, _D, _T, _K, _Z, _Q, _M, _E
+                );
+            }
 
-        // Migration: auto-initialize mFundraisingAddress if not set
-        if (state.mFundraisingAddress == NULL_ID)
-        {
-            state.mFundraisingAddress = ID(
-                _Q, _T, _D, _S, _Q, _G, _I, _E, _A, _P, _P, _M, _M, _D, _D, _S,
-                _E, _H, _B, _H, _H, _E, _T, _E, _U, _Z, _H, _B, _U, _Z, _X, _R,
-                _Y, _F, _K, _K, _T, _I, _C, _W, _A, _A, _U, _X, _V, _E, _W, _N,
-                _P, _C, _T, _G, _C, _A, _F, _B
-            );
-        }
+            // auto-initialize mFundraisingAddress if not set
+            if (state.mFundraisingAddress == NULL_ID)
+            {
+                state.mFundraisingAddress = ID(
+                    _Q, _T, _D, _S, _Q, _G, _I, _E, _A, _P, _P, _M, _M, _D, _D, _S,
+                    _E, _H, _B, _H, _H, _E, _T, _E, _U, _Z, _H, _B, _U, _Z, _X, _R,
+                    _Y, _F, _K, _K, _T, _I, _C, _W, _A, _A, _U, _X, _V, _E, _W, _N,
+                    _P, _C, _T, _G, _C, _A, _F, _B
+                );
+            }
 
-        // Migration: update mDedicatedRevenueAddress to new Pool C address
-        // Testnet: WFCELJRTMTYEGHNTYONQOWVQIUYBVBPTSIRCOTJUXFIQAQPEYJQGQQSAVDDM
-        locals.newDedicatedAddr = ID(
-            _W, _F, _C, _E, _L, _J, _R, _T, _M, _T, _Y, _E, _G, _H, _N, _T,
-            _Y, _O, _N, _Q, _O, _W, _V, _Q, _I, _U, _Y, _B, _V, _B, _P, _T,
-            _S, _I, _R, _C, _O, _T, _J, _U, _X, _F, _I, _Q, _A, _Q, _P, _E,
-            _Y, _J, _Q, _G, _Q, _Q, _S, _A
-        );
-        if (state.mDedicatedRevenueAddress != locals.newDedicatedAddr)
-        {
-            state.mDedicatedRevenueAddress = locals.newDedicatedAddr;
+            // update mDedicatedRevenueAddress to new Pool C address
+            // Testnet: WFCELJRTMTYEGHNTYONQOWVQIUYBVBPTSIRCOTJUXFIQAQPEYJQGQQSAVDDM
+            locals.newDedicatedAddr = ID(
+                _W, _F, _C, _E, _L, _J, _R, _T, _M, _T, _Y, _E, _G, _H, _N, _T,
+                _Y, _O, _N, _Q, _O, _W, _V, _Q, _I, _U, _Y, _B, _V, _B, _P, _T,
+                _S, _I, _R, _C, _O, _T, _J, _U, _X, _F, _I, _Q, _A, _Q, _P, _E,
+                _Y, _J, _Q, _G, _Q, _Q, _S, _A
+            );
+            if (state.mDedicatedRevenueAddress != locals.newDedicatedAddr)
+            {
+                state.mDedicatedRevenueAddress = locals.newDedicatedAddr;
+            }
         }
 
         // Reset new poll counters
@@ -1638,14 +1586,7 @@ public:
         AssetPossessionIterator qrwaIter;
         Asset qrwaAsset;
 
-        // QUTIL batch payout fields (Pool A QMINE)
-        QUTIL::SendToManyV1_input stm1Input;
-        QUTIL::SendToManyV1_output stm1Output;
-        uint32 batchCount;      // current slot 0..24
-        uint64 batchTotal;      // sum of amounts in current batch
-        uint32 batchFlushIdx;   // loop var for flushing ring buffer
-        QRWAPayoutEntry pendingEntries[QRWA_QUTIL_BATCH_SIZE];
-        QRWABatchTransferEntry batchEntry; // For writing to batch transfer ring buffer
+
     };
     END_TICK_WITH_LOCALS()
     {
@@ -1755,11 +1696,6 @@ public:
 
                 if ((locals.poolAQmine_128 > (uint128)0 || locals.poolBQmine_128 > (uint128)0 || locals.poolCQmine_128 > (uint128)0) && state.mPayoutTotalQmineBegin > 0)
                 {
-                    // Initialize QUTIL batch for Pool A
-                    setMemory(locals.stm1Input, 0);
-                    locals.batchCount = 0;
-                    locals.batchTotal = 0;
-
                     locals.qminePayoutIndex = NULL_INDEX;
 
                     while (true)
@@ -1788,7 +1724,7 @@ public:
 
                         if (locals.eligibleBalance > 0)
                         {
-                            // ── Pool A QMINE payout — accumulate into QUTIL batch ──
+                            // ── Pool A QMINE payout ──
                             if (locals.poolAQmine_128 > (uint128)0)
                             {
                                 locals.scaledPayout_128 = (uint128)locals.eligibleBalance * (uint128)state.mPoolAQmineDividend;
@@ -1800,63 +1736,19 @@ public:
                                 if (locals.eligiblePayout_128 > (uint128)0 && locals.eligiblePayout_128.high == 0)
                                 {
                                     locals.payout_u64 = locals.eligiblePayout_128.low;
-                                    if (locals.payout_u64 > 0)
+                                    if (locals.payout_u64 > 0 && qpi.transfer(locals.holder, (sint64)locals.payout_u64) >= 0)
                                     {
-                                        // Add to QUTIL batch
-                                        ((id*)&locals.stm1Input.dst0)[locals.batchCount] = locals.holder;
-                                        ((sint64*)&locals.stm1Input.amt0)[locals.batchCount] = (sint64)locals.payout_u64;
-                                        locals.pendingEntries[locals.batchCount].recipient = locals.holder;
-                                        locals.pendingEntries[locals.batchCount].amount = locals.payout_u64;
-                                        locals.pendingEntries[locals.batchCount].qmineHolding = locals.eligibleBalance;
-                                        locals.pendingEntries[locals.batchCount].qrwaHolding = 0;
-                                        locals.pendingEntries[locals.batchCount].tick = qpi.tick();
-                                        locals.pendingEntries[locals.batchCount].epoch = qpi.epoch();
-                                        locals.pendingEntries[locals.batchCount].payoutType = QRWA_PAYOUT_TYPE_QMINE_HOLDER;
-                                        locals.batchTotal = sadd(locals.batchTotal, locals.payout_u64);
                                         locals.poolAQmine_128 -= locals.eligiblePayout_128;
-                                        locals.batchCount++;
-
-                                        // Flush batch when full
-                                        if (locals.batchCount == QRWA_QUTIL_BATCH_SIZE)
-                                        {
-                                            {
-                                                INVOKE_OTHER_CONTRACT_PROCEDURE(QUTIL, SendToManyV1, locals.stm1Input, locals.stm1Output, (sint64)(locals.batchTotal + QRWA_QUTIL_FEE));
-                                                locals.batchEntry.totalAmount = locals.batchTotal;
-                                                locals.batchEntry.fee = (uint64)QRWA_QUTIL_FEE;
-                                                locals.batchEntry.invocationReward = (sint64)(locals.batchTotal + QRWA_QUTIL_FEE);
-                                                locals.batchEntry.tick = qpi.tick();
-                                                locals.batchEntry.epoch = qpi.epoch();
-                                                locals.batchEntry.recipientCount = (uint8)locals.batchCount;
-                                                locals.batchEntry.callError = (uint8)interContractCallError;
-                                                locals.batchEntry.returnCode = locals.stm1Output.returnCode;
-                                                if (interContractCallError == NoCallError && locals.stm1Output.returnCode == 0)
-                                                {
-                                                    locals.batchEntry.status = 0;
-                                                    for (locals.batchFlushIdx = 0; locals.batchFlushIdx < locals.batchCount; locals.batchFlushIdx++)
-                                                    {
-                                                        state.mTotalPoolADistributed = sadd(state.mTotalPoolADistributed, locals.pendingEntries[locals.batchFlushIdx].amount);
-                                                        state.mPayoutsPoolA.set(state.mPayoutsPoolANextIdx, locals.pendingEntries[locals.batchFlushIdx]);
-                                                        state.mPayoutsPoolANextIdx = (state.mPayoutsPoolANextIdx + 1) & (QRWA_PAYOUT_RING_SIZE - 1);
-                                                    }
-                                                    // Deduct QUTIL batch fee from pool budget
-                                                    locals.poolAQmine_128 -= (uint128)QRWA_QUTIL_FEE;
-                                                }
-                                                else
-                                                {
-                                                    locals.batchEntry.status = (interContractCallError != NoCallError) ? 1 : 2;
-                                                    // Batch failed — add amounts back to pool for next payout cycle
-                                                    for (locals.batchFlushIdx = 0; locals.batchFlushIdx < locals.batchCount; locals.batchFlushIdx++)
-                                                    {
-                                                        locals.poolAQmine_128 += (uint128)locals.pendingEntries[locals.batchFlushIdx].amount;
-                                                    }
-                                                }
-                                                state.mBatchTransfersPoolA.set(state.mBatchTransfersPoolANextIdx, locals.batchEntry);
-                                                state.mBatchTransfersPoolANextIdx = (state.mBatchTransfersPoolANextIdx + 1) & (QRWA_BATCH_RING_SIZE - 1);
-                                            }
-                                            setMemory(locals.stm1Input, 0);
-                                            locals.batchCount = 0;
-                                            locals.batchTotal = 0;
-                                        }
+                                        state.mTotalPoolADistributed = sadd(state.mTotalPoolADistributed, locals.payout_u64);
+                                        locals.payoutEntry.recipient = locals.holder;
+                                        locals.payoutEntry.amount = locals.payout_u64;
+                                        locals.payoutEntry.qmineHolding = locals.eligibleBalance;
+                                        locals.payoutEntry.qrwaHolding = 0;
+                                        locals.payoutEntry.tick = qpi.tick();
+                                        locals.payoutEntry.epoch = qpi.epoch();
+                                        locals.payoutEntry.payoutType = QRWA_PAYOUT_TYPE_QMINE_HOLDER;
+                                        state.mPayoutsPoolA.set(state.mPayoutsPoolANextIdx, locals.payoutEntry);
+                                        state.mPayoutsPoolANextIdx = (state.mPayoutsPoolANextIdx + 1) & (QRWA_PAYOUT_RING_SIZE - 1);
                                     }
                                 }
                             }
@@ -1919,47 +1811,6 @@ public:
                                 }
                             }
                         }
-                    }
-
-                    // Flush remaining partial batch for Pool A
-                    if (locals.batchCount > 0)
-                    {
-                        {
-                            INVOKE_OTHER_CONTRACT_PROCEDURE(QUTIL, SendToManyV1, locals.stm1Input, locals.stm1Output, (sint64)(locals.batchTotal + QRWA_QUTIL_FEE));
-                            locals.batchEntry.totalAmount = locals.batchTotal;
-                            locals.batchEntry.fee = (uint64)QRWA_QUTIL_FEE;
-                            locals.batchEntry.invocationReward = (sint64)(locals.batchTotal + QRWA_QUTIL_FEE);
-                            locals.batchEntry.tick = qpi.tick();
-                            locals.batchEntry.epoch = qpi.epoch();
-                            locals.batchEntry.recipientCount = (uint8)locals.batchCount;
-                            locals.batchEntry.callError = (uint8)interContractCallError;
-                            locals.batchEntry.returnCode = locals.stm1Output.returnCode;
-                            if (interContractCallError == NoCallError && locals.stm1Output.returnCode == 0)
-                            {
-                                locals.batchEntry.status = 0;
-                                for (locals.batchFlushIdx = 0; locals.batchFlushIdx < locals.batchCount; locals.batchFlushIdx++)
-                                {
-                                    state.mTotalPoolADistributed = sadd(state.mTotalPoolADistributed, locals.pendingEntries[locals.batchFlushIdx].amount);
-                                    state.mPayoutsPoolA.set(state.mPayoutsPoolANextIdx, locals.pendingEntries[locals.batchFlushIdx]);
-                                    state.mPayoutsPoolANextIdx = (state.mPayoutsPoolANextIdx + 1) & (QRWA_PAYOUT_RING_SIZE - 1);
-                                }
-                                // Deduct QUTIL batch fee from pool budget
-                                locals.poolAQmine_128 -= (uint128)QRWA_QUTIL_FEE;
-                            }
-                            else
-                            {
-                                locals.batchEntry.status = (interContractCallError != NoCallError) ? 1 : 2;
-                                // Batch failed — add amounts back to pool for next payout cycle
-                                for (locals.batchFlushIdx = 0; locals.batchFlushIdx < locals.batchCount; locals.batchFlushIdx++)
-                                {
-                                    locals.poolAQmine_128 += (uint128)locals.pendingEntries[locals.batchFlushIdx].amount;
-                                }
-                            }
-                            state.mBatchTransfersPoolA.set(state.mBatchTransfersPoolANextIdx, locals.batchEntry);
-                            state.mBatchTransfersPoolANextIdx = (state.mBatchTransfersPoolANextIdx + 1) & (QRWA_BATCH_RING_SIZE - 1);
-                        }
-                        locals.batchCount = 0;
-                        locals.batchTotal = 0;
                     }
 
                     // Dev payout: remainder of each pool's QMINE leg
@@ -2230,10 +2081,8 @@ public:
 
         // Revenue routing:
         // Pool A: mPoolARevenueAddress (QMINE issuer / mining revenue)
-        //         NOTE: QUTIL refunds (from failed SendToManyV1) are NOT routed here to avoid
-        //         double-counting — the failure recovery code already preserves amounts in mPoolAQmineDividend.
         // Pool C: Dedicated BTC revenue address (mDedicatedRevenueAddress)
-        // Pool B: Everything else (users, other contracts, QUTIL)
+        // Pool B: Everything else (users, other contracts)
         if (state.mDedicatedRevenueAddress != NULL_ID && input.sourceId == state.mDedicatedRevenueAddress)
         {
             // Pool C: Dedicated BTC revenue address
@@ -2351,6 +2200,6 @@ public:
         REGISTER_USER_FUNCTION(GetPayoutsQrwa, 13);
         REGISTER_USER_FUNCTION(GetPayoutsDedicated, 14);
         REGISTER_USER_FUNCTION(GetScDividendTracking, 15);
-        REGISTER_USER_FUNCTION(GetBatchTransfersPoolA, 16);
+
     }
 };
