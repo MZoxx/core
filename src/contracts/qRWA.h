@@ -1596,6 +1596,11 @@ public:
         uint64 payout_u64;
         uint64 foundEnd;
 
+        // Last paid holder per pool (for distributing rounding remainder)
+        id lastPaidHolderA;
+        id lastPaidHolderB;
+        id lastPaidHolderC;
+
         QRWALogger logger;
         QRWAPayoutEntry payoutEntry;
         AssetPossessionIterator qrwaIter;
@@ -1827,6 +1832,7 @@ public:
                                     {
                                         locals.poolAQmine_128 -= locals.eligiblePayout_128;
                                         state.mTotalPoolADistributed = sadd(state.mTotalPoolADistributed, locals.payout_u64);
+                                        locals.lastPaidHolderA = locals.holder;
                                         locals.payoutEntry.recipient = locals.holder;
                                         locals.payoutEntry.amount = locals.payout_u64;
                                         locals.payoutEntry.qmineHolding = locals.eligibleBalance;
@@ -1856,6 +1862,7 @@ public:
                                     {
                                         locals.poolBQmine_128 -= locals.eligiblePayout_128;
                                         state.mTotalPoolBDistributed = sadd(state.mTotalPoolBDistributed, locals.payout_u64);
+                                        locals.lastPaidHolderB = locals.holder;
                                         locals.payoutEntry.recipient = locals.holder;
                                         locals.payoutEntry.amount = locals.payout_u64;
                                         locals.payoutEntry.qmineHolding = locals.eligibleBalance;
@@ -1885,6 +1892,7 @@ public:
                                     {
                                         locals.poolCQmine_128 -= locals.eligiblePayout_128;
                                         state.mTotalPoolCDistributed = sadd(state.mTotalPoolCDistributed, locals.payout_u64);
+                                        locals.lastPaidHolderC = locals.holder;
                                         locals.payoutEntry.recipient = locals.holder;
                                         locals.payoutEntry.amount = locals.payout_u64;
                                         locals.payoutEntry.qmineHolding = locals.eligibleBalance;
@@ -1900,72 +1908,42 @@ public:
                         }
                     }
 
-                    // Dev payout: remainder of each pool's QMINE leg
-                    if (state.mCurrentGovParams.qmineDevAddress != NULL_ID)
+                    // QMINE remainder: send to last paid holder (rounding dust)
+                    // Pool A remainder
+                    if (locals.poolAQmine_128 > (uint128)0 && locals.poolAQmine_128.high == 0 && locals.lastPaidHolderA != NULL_ID)
                     {
-                        // Pool A dev
-                        if (locals.poolAQmine_128 > (uint128)0 && locals.poolAQmine_128.high == 0)
+                        locals.payout_u64 = locals.poolAQmine_128.low;
+                        if (locals.payout_u64 > 0 && qpi.transfer(locals.lastPaidHolderA, (sint64)locals.payout_u64) >= 0)
                         {
-                            locals.payout_u64 = locals.poolAQmine_128.low;
-                            if (locals.payout_u64 > 0 && qpi.transfer(state.mCurrentGovParams.qmineDevAddress, (sint64)locals.payout_u64) >= 0)
-                            {
-                                state.mTotalPoolADistributed = sadd(state.mTotalPoolADistributed, locals.payout_u64);
-                                locals.poolAQmine_128 = 0;
-                                locals.payoutEntry.recipient = state.mCurrentGovParams.qmineDevAddress;
-                                locals.payoutEntry.amount = locals.payout_u64;
-                                locals.payoutEntry.qmineHolding = 0;
-                                locals.payoutEntry.qrwaHolding = 0;
-                                locals.payoutEntry.tick = qpi.tick();
-                                locals.payoutEntry.epoch = qpi.epoch();
-                                locals.payoutEntry.payoutType = QRWA_PAYOUT_TYPE_QMINE_DEV;
-                                state.mPayoutsPoolA.set(state.mPayoutsPoolANextIdx, locals.payoutEntry);
-                                state.mPayoutsPoolANextIdx = (state.mPayoutsPoolANextIdx + 1) & (QRWA_PAYOUT_RING_SIZE - 1);
-                            }
+                            state.mTotalPoolADistributed = sadd(state.mTotalPoolADistributed, locals.payout_u64);
+                            locals.poolAQmine_128 = 0;
                         }
-                        // Pool B dev
-                        if (locals.poolBQmine_128 > (uint128)0 && locals.poolBQmine_128.high == 0)
+                    }
+                    // Pool B remainder
+                    if (locals.poolBQmine_128 > (uint128)0 && locals.poolBQmine_128.high == 0 && locals.lastPaidHolderB != NULL_ID)
+                    {
+                        locals.payout_u64 = locals.poolBQmine_128.low;
+                        if (locals.payout_u64 > 0 && qpi.transfer(locals.lastPaidHolderB, (sint64)locals.payout_u64) >= 0)
                         {
-                            locals.payout_u64 = locals.poolBQmine_128.low;
-                            if (locals.payout_u64 > 0 && qpi.transfer(state.mCurrentGovParams.qmineDevAddress, (sint64)locals.payout_u64) >= 0)
-                            {
-                                state.mTotalPoolBDistributed = sadd(state.mTotalPoolBDistributed, locals.payout_u64);
-                                locals.poolBQmine_128 = 0;
-                                locals.payoutEntry.recipient = state.mCurrentGovParams.qmineDevAddress;
-                                locals.payoutEntry.amount = locals.payout_u64;
-                                locals.payoutEntry.qmineHolding = 0;
-                                locals.payoutEntry.qrwaHolding = 0;
-                                locals.payoutEntry.tick = qpi.tick();
-                                locals.payoutEntry.epoch = qpi.epoch();
-                                locals.payoutEntry.payoutType = QRWA_PAYOUT_TYPE_QMINE_DEV;
-                                state.mPayoutsPoolB.set(state.mPayoutsPoolBNextIdx, locals.payoutEntry);
-                                state.mPayoutsPoolBNextIdx = (state.mPayoutsPoolBNextIdx + 1) & (QRWA_PAYOUT_RING_SIZE - 1);
-                            }
+                            state.mTotalPoolBDistributed = sadd(state.mTotalPoolBDistributed, locals.payout_u64);
+                            locals.poolBQmine_128 = 0;
                         }
-                        // Pool C dev
-                        if (locals.poolCQmine_128 > (uint128)0 && locals.poolCQmine_128.high == 0)
+                    }
+                    // Pool C remainder
+                    if (locals.poolCQmine_128 > (uint128)0 && locals.poolCQmine_128.high == 0 && locals.lastPaidHolderC != NULL_ID)
+                    {
+                        locals.payout_u64 = locals.poolCQmine_128.low;
+                        if (locals.payout_u64 > 0 && qpi.transfer(locals.lastPaidHolderC, (sint64)locals.payout_u64) >= 0)
                         {
-                            locals.payout_u64 = locals.poolCQmine_128.low;
-                            if (locals.payout_u64 > 0 && qpi.transfer(state.mCurrentGovParams.qmineDevAddress, (sint64)locals.payout_u64) >= 0)
-                            {
-                                state.mTotalPoolCDistributed = sadd(state.mTotalPoolCDistributed, locals.payout_u64);
-                                locals.poolCQmine_128 = 0;
-                                locals.payoutEntry.recipient = state.mCurrentGovParams.qmineDevAddress;
-                                locals.payoutEntry.amount = locals.payout_u64;
-                                locals.payoutEntry.qmineHolding = 0;
-                                locals.payoutEntry.qrwaHolding = 0;
-                                locals.payoutEntry.tick = qpi.tick();
-                                locals.payoutEntry.epoch = qpi.epoch();
-                                locals.payoutEntry.payoutType = QRWA_PAYOUT_TYPE_QMINE_DEV;
-                                state.mPayoutsPoolC.set(state.mPayoutsPoolCNextIdx, locals.payoutEntry);
-                                state.mPayoutsPoolCNextIdx = (state.mPayoutsPoolCNextIdx + 1) & (QRWA_PAYOUT_RING_SIZE - 1);
-                            }
+                            state.mTotalPoolCDistributed = sadd(state.mTotalPoolCDistributed, locals.payout_u64);
+                            locals.poolCQmine_128 = 0;
                         }
                     }
 
-                    // Preserve undistributed remainder for active pools only
-                    if (locals.poolAReady == 1) state.mPoolAQmineDividend = locals.poolAQmine_128.low;
-                    if (locals.poolBReady == 1) state.mPoolBQmineDividend = locals.poolBQmine_128.low;
-                    if (locals.poolCReady == 1) state.mPoolCQmineDividend = locals.poolCQmine_128.low;
+                    // Clear QMINE dividends for active pools (fully distributed)
+                    if (locals.poolAReady == 1) state.mPoolAQmineDividend = 0;
+                    if (locals.poolBReady == 1) state.mPoolBQmineDividend = 0;
+                    if (locals.poolCReady == 1) state.mPoolCQmineDividend = 0;
                 } // End QMINE distribution
 
                 // ──── qRWA distribution (Pool A + Pool B): single pass over qRWA holders ────
@@ -2013,6 +1991,7 @@ public:
                                     {
                                         locals.poolAQrwaDistributed = sadd(locals.poolAQrwaDistributed, locals.payout_u64);
                                         state.mTotalPoolADistributed = sadd(state.mTotalPoolADistributed, locals.payout_u64);
+                                        locals.lastPaidHolderA = locals.holder;
                                         locals.payoutEntry.recipient = locals.holder;
                                         locals.payoutEntry.amount = locals.payout_u64;
                                         locals.payoutEntry.qmineHolding = 0;
@@ -2033,6 +2012,7 @@ public:
                                     {
                                         locals.poolBQrwaDistributed = sadd(locals.poolBQrwaDistributed, locals.payout_u64);
                                         state.mTotalPoolBDistributed = sadd(state.mTotalPoolBDistributed, locals.payout_u64);
+                                        locals.lastPaidHolderB = locals.holder;
                                         locals.payoutEntry.recipient = locals.holder;
                                         locals.payoutEntry.amount = locals.payout_u64;
                                         locals.payoutEntry.qmineHolding = 0;
@@ -2046,28 +2026,28 @@ public:
                                 }
                             }
 
-                            // Pool A qRWA: send remainder to dev wallet
+                            // Pool A qRWA: send remainder to last paid holder
                             if (locals.poolAReady == 1)
                             {
                                 state.mPoolAQrwaDividend = (state.mPoolAQrwaDividend > locals.poolAQrwaDistributed)
                                     ? (state.mPoolAQrwaDividend - locals.poolAQrwaDistributed) : 0;
-                                if (state.mPoolAQrwaDividend > 0 && state.mCurrentGovParams.qmineDevAddress != NULL_ID)
+                                if (state.mPoolAQrwaDividend > 0 && locals.lastPaidHolderA != NULL_ID)
                                 {
-                                    if (qpi.transfer(state.mCurrentGovParams.qmineDevAddress, static_cast<sint64>(state.mPoolAQrwaDividend)) >= 0)
+                                    if (qpi.transfer(locals.lastPaidHolderA, static_cast<sint64>(state.mPoolAQrwaDividend)) >= 0)
                                     {
                                         state.mTotalPoolADistributed = sadd(state.mTotalPoolADistributed, state.mPoolAQrwaDividend);
                                         state.mPoolAQrwaDividend = 0;
                                     }
                                 }
                             }
-                            // Pool B qRWA: send remainder to dev wallet
+                            // Pool B qRWA: send remainder to last paid holder
                             if (locals.poolBReady == 1)
                             {
                                 state.mPoolBQrwaDividend = (state.mPoolBQrwaDividend > locals.poolBQrwaDistributed)
                                     ? (state.mPoolBQrwaDividend - locals.poolBQrwaDistributed) : 0;
-                                if (state.mPoolBQrwaDividend > 0 && state.mCurrentGovParams.qmineDevAddress != NULL_ID)
+                                if (state.mPoolBQrwaDividend > 0 && locals.lastPaidHolderB != NULL_ID)
                                 {
-                                    if (qpi.transfer(state.mCurrentGovParams.qmineDevAddress, static_cast<sint64>(state.mPoolBQrwaDividend)) >= 0)
+                                    if (qpi.transfer(locals.lastPaidHolderB, static_cast<sint64>(state.mPoolBQrwaDividend)) >= 0)
                                     {
                                         state.mTotalPoolBDistributed = sadd(state.mTotalPoolBDistributed, state.mPoolBQrwaDividend);
                                         state.mPoolBQrwaDividend = 0;
@@ -2136,6 +2116,7 @@ public:
                                 {
                                     locals.dedicatedDistributed = sadd(locals.dedicatedDistributed, locals.payout_u64);
                                     state.mTotalPoolCDistributed = sadd(state.mTotalPoolCDistributed, locals.payout_u64);
+                                    locals.lastPaidHolderC = locals.holder;
                                     locals.payoutEntry.recipient = locals.holder;
                                     locals.payoutEntry.amount = locals.payout_u64;
                                     locals.payoutEntry.qmineHolding = static_cast<uint64>(locals.qmineBalance);
@@ -2150,10 +2131,10 @@ public:
 
                             state.mPoolCQrwaDividend = (state.mPoolCQrwaDividend > locals.dedicatedDistributed)
                                 ? (state.mPoolCQrwaDividend - locals.dedicatedDistributed) : 0;
-                            // Pool C dedicated: send remainder to dev wallet
-                            if (state.mPoolCQrwaDividend > 0 && state.mCurrentGovParams.qmineDevAddress != NULL_ID)
+                            // Pool C dedicated: send remainder to last paid holder
+                            if (state.mPoolCQrwaDividend > 0 && locals.lastPaidHolderC != NULL_ID)
                             {
-                                if (qpi.transfer(state.mCurrentGovParams.qmineDevAddress, static_cast<sint64>(state.mPoolCQrwaDividend)) >= 0)
+                                if (qpi.transfer(locals.lastPaidHolderC, static_cast<sint64>(state.mPoolCQrwaDividend)) >= 0)
                                 {
                                     state.mTotalPoolCDistributed = sadd(state.mTotalPoolCDistributed, state.mPoolCQrwaDividend);
                                     state.mPoolCQrwaDividend = 0;
