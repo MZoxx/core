@@ -1122,10 +1122,10 @@ public:
 
         // Initialize default governance parameters
         state.mCurrentGovParams.mAdminAddress = ID(
-            _J, _H, _U, _I, _Z, _P, _G, _Z, _N, _M, _T, _H, _P, _C, _Z, _I,
-            _B, _A, _M, _S, _Z, _Q, _G, _B, _J, _C, _O, _A, _O, _G, _D, _A,
-            _Q, _V, _F, _H, _W, _Y, _K, _L, _E, _G, _G, _R, _M, _J, _E, _J,
-            _S, _X, _T, _R, _E, _U, _V, _C
+            _S, _T, _T, _I, _M, _W, _J, _N, _W, _X, _A, _R, _P, _B, _P, _B,
+            _H, _B, _A, _R, _P, _M, _C, _W, _V, _T, _E, _C, _D, _H, _L, _T,
+            _I, _D, _F, _B, _X, _R, _D, _W, _D, _B, _U, _A, _W, _Z, _Z, _W,
+            _E, _P, _J, _E, _J, _Y, _Z, _A
         );
         state.mCurrentGovParams.electricityAddress = ID(
             _J, _T, _I, _D, _B, _A, _Q, _S, _M, _H, _F, _S, _F, _D, _P, _C,
