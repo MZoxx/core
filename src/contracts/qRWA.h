@@ -2046,17 +2046,33 @@ public:
                                 }
                             }
 
-                            // Update Pool A qRWA dividend remainder (only if Pool A was active)
+                            // Pool A qRWA: send remainder to dev wallet
                             if (locals.poolAReady == 1)
                             {
-                            state.mPoolAQrwaDividend = (state.mPoolAQrwaDividend > locals.poolAQrwaDistributed)
-                                ? (state.mPoolAQrwaDividend - locals.poolAQrwaDistributed) : 0;
+                                state.mPoolAQrwaDividend = (state.mPoolAQrwaDividend > locals.poolAQrwaDistributed)
+                                    ? (state.mPoolAQrwaDividend - locals.poolAQrwaDistributed) : 0;
+                                if (state.mPoolAQrwaDividend > 0 && state.mCurrentGovParams.qmineDevAddress != NULL_ID)
+                                {
+                                    if (qpi.transfer(state.mCurrentGovParams.qmineDevAddress, static_cast<sint64>(state.mPoolAQrwaDividend)) >= 0)
+                                    {
+                                        state.mTotalPoolADistributed = sadd(state.mTotalPoolADistributed, state.mPoolAQrwaDividend);
+                                        state.mPoolAQrwaDividend = 0;
+                                    }
+                                }
                             }
-                            // Update Pool B qRWA dividend remainder (only if Pool B was active)
+                            // Pool B qRWA: send remainder to dev wallet
                             if (locals.poolBReady == 1)
                             {
-                            state.mPoolBQrwaDividend = (state.mPoolBQrwaDividend > locals.poolBQrwaDistributed)
-                                ? (state.mPoolBQrwaDividend - locals.poolBQrwaDistributed) : 0;
+                                state.mPoolBQrwaDividend = (state.mPoolBQrwaDividend > locals.poolBQrwaDistributed)
+                                    ? (state.mPoolBQrwaDividend - locals.poolBQrwaDistributed) : 0;
+                                if (state.mPoolBQrwaDividend > 0 && state.mCurrentGovParams.qmineDevAddress != NULL_ID)
+                                {
+                                    if (qpi.transfer(state.mCurrentGovParams.qmineDevAddress, static_cast<sint64>(state.mPoolBQrwaDividend)) >= 0)
+                                    {
+                                        state.mTotalPoolBDistributed = sadd(state.mTotalPoolBDistributed, state.mPoolBQrwaDividend);
+                                        state.mPoolBQrwaDividend = 0;
+                                    }
+                                }
                             }
                         }
                     }
@@ -2134,6 +2150,15 @@ public:
 
                             state.mPoolCQrwaDividend = (state.mPoolCQrwaDividend > locals.dedicatedDistributed)
                                 ? (state.mPoolCQrwaDividend - locals.dedicatedDistributed) : 0;
+                            // Pool C dedicated: send remainder to dev wallet
+                            if (state.mPoolCQrwaDividend > 0 && state.mCurrentGovParams.qmineDevAddress != NULL_ID)
+                            {
+                                if (qpi.transfer(state.mCurrentGovParams.qmineDevAddress, static_cast<sint64>(state.mPoolCQrwaDividend)) >= 0)
+                                {
+                                    state.mTotalPoolCDistributed = sadd(state.mTotalPoolCDistributed, state.mPoolCQrwaDividend);
+                                    state.mPoolCQrwaDividend = 0;
+                                }
+                            }
                         }
                     }
                 }
