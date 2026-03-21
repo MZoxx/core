@@ -22,12 +22,12 @@ constexpr uint64 QRWA_CONTRACT_ASSET_NAME = 1096241745ULL; // assetNameFromStrin
 // Payout Timing Constants
 // Production: FRIDAY, per-pool staggered schedule, 6-day min interval
 // Testnet:    any day, all pools at 06:20 UTC, 1h min interval
-constexpr uint64 QRWA_PAYOUT_DAY = SATURDAY;
+constexpr uint64 QRWA_PAYOUT_DAY = FRIDAY;
 constexpr uint64 QRWA_PAYOUT_HOUR_POOL_A = 7;       // Qubic Mining  | Production: 12
 constexpr uint64 QRWA_PAYOUT_HOUR_POOL_B = 7;       // SC Assets     | Production: 14
 constexpr uint64 QRWA_PAYOUT_HOUR_POOL_C = 7;       // BTC Mining    | Production: 13
 constexpr uint64 QRWA_PAYOUT_MINUTE = 0;             // Trigger at :00 | Production: 0
-constexpr uint64 QRWA_CHECK_DAY_OF_WEEK = 1;         // 1=check day (Saturday) | Production: 1 (Friday)
+constexpr uint64 QRWA_CHECK_DAY_OF_WEEK = 0;         // 0=any day (Testnet) | Production: 1
 constexpr uint64 QRWA_MIN_PAYOUT_INTERVAL_MS = 3600000ULL; // 1h (Testnet) | Production: 6 * 86400000ULL (6 days)
 
 // STATUS CODES for Procedures
@@ -69,7 +69,7 @@ constexpr uint64 QRWA_LOG_TYPE_PAYOUT_DEDICATED_QRWA = 14; // valueA=amount, val
 constexpr uint64 QRWA_LOG_TYPE_INCOMING_SC_DIVIDEND = 15; // SC dividend received → Pool B; valueA=amount, valueB=cumulative
 
 // Ring buffer for tracking the last N individual payouts (queryable via GetLatestPayouts = fn 11)
-constexpr uint64 QRWA_PAYOUT_RING_SIZE = 8192; // Must be a power of 2
+constexpr uint64 QRWA_PAYOUT_RING_SIZE = 16384; // Must be a power of 2
 constexpr uint8 QRWA_PAYOUT_TYPE_QMINE_HOLDER    = 0; // Regular QMINE holder payout
 constexpr uint8 QRWA_PAYOUT_TYPE_QMINE_DEV       = 1; // Dev address gets reducer's portion
 constexpr uint8 QRWA_PAYOUT_TYPE_QRWA_HOLDER     = 2; // qRWA shareholder (Pool B)
