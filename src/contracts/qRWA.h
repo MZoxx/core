@@ -996,7 +996,7 @@ public:
     };
     struct GetPayoutsQmine_output
     {
-        QRWAPayoutEntry payouts[QRWA_PAYOUT_PAGE_SIZE];
+        Array<QRWAPayoutEntry, QRWA_PAYOUT_PAGE_SIZE> payouts;
         uint16 nextIdx;        // Write cursor in full ring buffer
         uint16 returnedCount;  // Number of valid entries in this page
         uint16 page;           // Echoed page number
@@ -1007,18 +1007,19 @@ public:
         uint64 i;
         uint64 ringIdx;
         uint64 count;
+        uint64 startOffset;
     };
     PUBLIC_FUNCTION_WITH_LOCALS(GetPayoutsQmine)
     {
         output.nextIdx = state.mPayoutsPoolANextIdx;
         output.page = input.page;
-        output.totalPages = (uint16)((QRWA_PAYOUT_RING_SIZE + QRWA_PAYOUT_PAGE_SIZE - 1) / QRWA_PAYOUT_PAGE_SIZE);
-        uint64 startOffset = (uint64)input.page * QRWA_PAYOUT_PAGE_SIZE;
+        output.totalPages = (uint16)(div<uint64>(QRWA_PAYOUT_RING_SIZE + QRWA_PAYOUT_PAGE_SIZE - 1, QRWA_PAYOUT_PAGE_SIZE));
+        locals.startOffset = (uint64)input.page * QRWA_PAYOUT_PAGE_SIZE;
         locals.count = 0;
-        for (locals.i = 0; locals.i < QRWA_PAYOUT_PAGE_SIZE && (startOffset + locals.i) < QRWA_PAYOUT_RING_SIZE; locals.i++)
+        for (locals.i = 0; locals.i < QRWA_PAYOUT_PAGE_SIZE && (locals.startOffset + locals.i) < QRWA_PAYOUT_RING_SIZE; locals.i++)
         {
-            locals.ringIdx = ((uint64)state.mPayoutsPoolANextIdx - 1 - startOffset - locals.i + QRWA_PAYOUT_RING_SIZE) & (QRWA_PAYOUT_RING_SIZE - 1);
-            output.payouts[locals.count] = state.mPayoutsPoolA.get(locals.ringIdx);
+            locals.ringIdx = ((uint64)state.mPayoutsPoolANextIdx - 1 - locals.startOffset - locals.i + QRWA_PAYOUT_RING_SIZE) & (QRWA_PAYOUT_RING_SIZE - 1);
+            output.payouts.set(locals.count, state.mPayoutsPoolA.get(locals.ringIdx));
             locals.count++;
         }
         output.returnedCount = (uint16)locals.count;
@@ -1031,7 +1032,7 @@ public:
     };
     struct GetPayoutsQrwa_output
     {
-        QRWAPayoutEntry payouts[QRWA_PAYOUT_PAGE_SIZE];
+        Array<QRWAPayoutEntry, QRWA_PAYOUT_PAGE_SIZE> payouts;
         uint16 nextIdx;
         uint16 returnedCount;
         uint16 page;
@@ -1042,18 +1043,19 @@ public:
         uint64 i;
         uint64 ringIdx;
         uint64 count;
+        uint64 startOffset;
     };
     PUBLIC_FUNCTION_WITH_LOCALS(GetPayoutsQrwa)
     {
         output.nextIdx = state.mPayoutsPoolBNextIdx;
         output.page = input.page;
-        output.totalPages = (uint16)((QRWA_PAYOUT_RING_SIZE + QRWA_PAYOUT_PAGE_SIZE - 1) / QRWA_PAYOUT_PAGE_SIZE);
-        uint64 startOffset = (uint64)input.page * QRWA_PAYOUT_PAGE_SIZE;
+        output.totalPages = (uint16)(div<uint64>(QRWA_PAYOUT_RING_SIZE + QRWA_PAYOUT_PAGE_SIZE - 1, QRWA_PAYOUT_PAGE_SIZE));
+        locals.startOffset = (uint64)input.page * QRWA_PAYOUT_PAGE_SIZE;
         locals.count = 0;
-        for (locals.i = 0; locals.i < QRWA_PAYOUT_PAGE_SIZE && (startOffset + locals.i) < QRWA_PAYOUT_RING_SIZE; locals.i++)
+        for (locals.i = 0; locals.i < QRWA_PAYOUT_PAGE_SIZE && (locals.startOffset + locals.i) < QRWA_PAYOUT_RING_SIZE; locals.i++)
         {
-            locals.ringIdx = ((uint64)state.mPayoutsPoolBNextIdx - 1 - startOffset - locals.i + QRWA_PAYOUT_RING_SIZE) & (QRWA_PAYOUT_RING_SIZE - 1);
-            output.payouts[locals.count] = state.mPayoutsPoolB.get(locals.ringIdx);
+            locals.ringIdx = ((uint64)state.mPayoutsPoolBNextIdx - 1 - locals.startOffset - locals.i + QRWA_PAYOUT_RING_SIZE) & (QRWA_PAYOUT_RING_SIZE - 1);
+            output.payouts.set(locals.count, state.mPayoutsPoolB.get(locals.ringIdx));
             locals.count++;
         }
         output.returnedCount = (uint16)locals.count;
@@ -1066,7 +1068,7 @@ public:
     };
     struct GetPayoutsDedicated_output
     {
-        QRWAPayoutEntry payouts[QRWA_PAYOUT_PAGE_SIZE];
+        Array<QRWAPayoutEntry, QRWA_PAYOUT_PAGE_SIZE> payouts;
         uint16 nextIdx;
         uint16 returnedCount;
         uint16 page;
@@ -1077,18 +1079,19 @@ public:
         uint64 i;
         uint64 ringIdx;
         uint64 count;
+        uint64 startOffset;
     };
     PUBLIC_FUNCTION_WITH_LOCALS(GetPayoutsDedicated)
     {
         output.nextIdx = state.mPayoutsPoolCNextIdx;
         output.page = input.page;
-        output.totalPages = (uint16)((QRWA_PAYOUT_RING_SIZE + QRWA_PAYOUT_PAGE_SIZE - 1) / QRWA_PAYOUT_PAGE_SIZE);
-        uint64 startOffset = (uint64)input.page * QRWA_PAYOUT_PAGE_SIZE;
+        output.totalPages = (uint16)(div<uint64>(QRWA_PAYOUT_RING_SIZE + QRWA_PAYOUT_PAGE_SIZE - 1, QRWA_PAYOUT_PAGE_SIZE));
+        locals.startOffset = (uint64)input.page * QRWA_PAYOUT_PAGE_SIZE;
         locals.count = 0;
-        for (locals.i = 0; locals.i < QRWA_PAYOUT_PAGE_SIZE && (startOffset + locals.i) < QRWA_PAYOUT_RING_SIZE; locals.i++)
+        for (locals.i = 0; locals.i < QRWA_PAYOUT_PAGE_SIZE && (locals.startOffset + locals.i) < QRWA_PAYOUT_RING_SIZE; locals.i++)
         {
-            locals.ringIdx = ((uint64)state.mPayoutsPoolCNextIdx - 1 - startOffset - locals.i + QRWA_PAYOUT_RING_SIZE) & (QRWA_PAYOUT_RING_SIZE - 1);
-            output.payouts[locals.count] = state.mPayoutsPoolC.get(locals.ringIdx);
+            locals.ringIdx = ((uint64)state.mPayoutsPoolCNextIdx - 1 - locals.startOffset - locals.i + QRWA_PAYOUT_RING_SIZE) & (QRWA_PAYOUT_RING_SIZE - 1);
+            output.payouts.set(locals.count, state.mPayoutsPoolC.get(locals.ringIdx));
             locals.count++;
         }
         output.returnedCount = (uint16)locals.count;
