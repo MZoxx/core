@@ -987,7 +987,7 @@ public:
     // Per-pool payout ring buffer queries (paginated).
     // Ring buffer stores QRWA_PAYOUT_RING_SIZE entries, query returns max QRWA_PAYOUT_PAGE_SIZE per call.
     // Entries are returned newest-first. page=0 → most recent, page=1 → next 1000, etc.
-    static constexpr uint64 QRWA_PAYOUT_PAGE_SIZE = 1000;
+    static constexpr uint64 QRWA_PAYOUT_PAGE_SIZE = 512;
 
     // GetPayoutsPoolA (fn 11): Pool A payouts — QMINE + qRWA holders (types 0+1+2, after gov fees)
     struct GetPayoutsQmine_input
