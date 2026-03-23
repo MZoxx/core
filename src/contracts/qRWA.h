@@ -27,10 +27,10 @@ constexpr uint32 QRWA_PAYOUT_TICK_INTERVAL = 10;     // Every 10 ticks (only whe
 
 // UTC-based constants
 constexpr uint64 QRWA_PAYOUT_DAY = FRIDAY;
-constexpr uint64 QRWA_PAYOUT_HOUR_POOL_A = 21;      // Qubic Mining  | Production: 12
-constexpr uint64 QRWA_PAYOUT_HOUR_POOL_B = 21;      // SC Assets     | Production: 14
-constexpr uint64 QRWA_PAYOUT_HOUR_POOL_C = 21;      // BTC Mining    | Production: 13
-constexpr uint64 QRWA_PAYOUT_MINUTE = 10;            // Trigger at :10 | Production: 0
+constexpr uint64 QRWA_PAYOUT_HOUR_POOL_A = 20;      // Qubic Mining  | Production: 12
+constexpr uint64 QRWA_PAYOUT_HOUR_POOL_B = 20;      // SC Assets     | Production: 14
+constexpr uint64 QRWA_PAYOUT_HOUR_POOL_C = 20;      // BTC Mining    | Production: 13
+constexpr uint64 QRWA_PAYOUT_MINUTE = 20;            // Trigger at :20 | Production: 0
 constexpr uint64 QRWA_CHECK_DAY_OF_WEEK = 0;         // 0=any day (Testnet) | Production: 1
 constexpr uint64 QRWA_MIN_PAYOUT_INTERVAL_MS = 3600000ULL; // 1h (Testnet) | Production: 6 * 86400000ULL (6 days)
 
@@ -1602,6 +1602,9 @@ public:
         uint64 poolAReady;
         uint64 poolBReady;
         uint64 poolCReady;
+        uint64 poolAHadRevenue;
+        uint64 poolBHadRevenue;
+        uint64 poolCHadRevenue;
         uint64 dayMatch;
 
         // Gov fee locals
@@ -1624,6 +1627,7 @@ public:
 
         // Dedicated qRWA distribution (Pool C)
         uint64 dedicatedEligibleShares;
+        uint64 dedicatedEligibleSharesHolder;
         uint64 dedicatedAmountPerShare;
         uint64 dedicatedDistributed;
         uint64 qrwaShares;
@@ -1751,6 +1755,10 @@ public:
 
         if (locals.poolAReady == 1 || locals.poolBReady == 1 || locals.poolCReady == 1)
         {
+                // Track whether each pool has revenue before distribution
+                locals.poolAHadRevenue = (locals.poolAReady == 1 && state.mRevenuePoolA > 0) ? 1 : 0;
+                locals.poolBHadRevenue = (locals.poolBReady == 1 && state.mRevenuePoolB > 0) ? 1 : 0;
+                locals.poolCHadRevenue = (locals.poolCReady == 1 && state.mDedicatedRevenuePool > 0) ? 1 : 0;
                 locals.logger.contractId = CONTRACT_INDEX;
                 locals.logger.logType = QRWA_LOG_TYPE_DISTRIBUTION;
 
@@ -2130,7 +2138,9 @@ public:
                     }
                 }
 
-                // ──── Dedicated qRWA distribution (Pool C): requires >= 100K QMINE per qRWA share ────
+                // ──── Dedicated qRWA distribution (Pool C): partial eligibility based on QMINE ────
+                // Each qRWA share requires 100K QMINE. Holders get payout for min(qrwaShares, qmineBalance/100K).
+                // Shares not covered by QMINE are redistributed to all eligible holders.
                 if (locals.poolCReady == 1 && state.mPoolCQrwaDividend > 0)
                 {
                     locals.qrwaAsset.issuer = id::zero();
@@ -2153,10 +2163,13 @@ public:
                         );
                         if (locals.qmineBalance <= 0) continue;
 
-                        locals.requiredQmine = smul(locals.qrwaShares, QRWA_QMINE_PER_QRWA_SHARE_MIN);
-                        if (static_cast<uint64>(locals.qmineBalance) >= locals.requiredQmine)
+                        // Partial eligibility: eligible shares = min(qrwaShares, qmineBalance / 100K)
+                        locals.dedicatedEligibleSharesHolder = div<uint64>(static_cast<uint64>(locals.qmineBalance), QRWA_QMINE_PER_QRWA_SHARE_MIN);
+                        if (locals.dedicatedEligibleSharesHolder > locals.qrwaShares)
+                            locals.dedicatedEligibleSharesHolder = locals.qrwaShares;
+                        if (locals.dedicatedEligibleSharesHolder > 0)
                         {
-                            locals.dedicatedEligibleShares = sadd(locals.dedicatedEligibleShares, locals.qrwaShares);
+                            locals.dedicatedEligibleShares = sadd(locals.dedicatedEligibleShares, locals.dedicatedEligibleSharesHolder);
                         }
                     }
 
@@ -2182,10 +2195,13 @@ public:
                                 );
                                 if (locals.qmineBalance <= 0) continue;
 
-                                locals.requiredQmine = smul(locals.qrwaShares, QRWA_QMINE_PER_QRWA_SHARE_MIN);
-                                if (static_cast<uint64>(locals.qmineBalance) < locals.requiredQmine) continue;
+                                // Partial eligibility: same calculation as counting loop
+                                locals.dedicatedEligibleSharesHolder = div<uint64>(static_cast<uint64>(locals.qmineBalance), QRWA_QMINE_PER_QRWA_SHARE_MIN);
+                                if (locals.dedicatedEligibleSharesHolder > locals.qrwaShares)
+                                    locals.dedicatedEligibleSharesHolder = locals.qrwaShares;
+                                if (locals.dedicatedEligibleSharesHolder == 0) continue;
 
-                                locals.payout_u64 = smul(locals.dedicatedAmountPerShare, locals.qrwaShares);
+                                locals.payout_u64 = smul(locals.dedicatedAmountPerShare, locals.dedicatedEligibleSharesHolder);
                                 if (locals.payout_u64 > 0 && qpi.transfer(locals.holder, static_cast<sint64>(locals.payout_u64)) >= 0)
                                 {
                                     locals.dedicatedDistributed = sadd(locals.dedicatedDistributed, locals.payout_u64);
@@ -2194,7 +2210,7 @@ public:
                                     locals.payoutEntry.recipient = locals.holder;
                                     locals.payoutEntry.amount = locals.payout_u64;
                                     locals.payoutEntry.qmineHolding = static_cast<uint64>(locals.qmineBalance);
-                                    locals.payoutEntry.qrwaHolding = locals.qrwaShares;
+                                    locals.payoutEntry.qrwaHolding = locals.dedicatedEligibleSharesHolder; // eligible shares (may be < total held)
                                     locals.payoutEntry.tick = qpi.tick();
                                     locals.payoutEntry.epoch = qpi.epoch();
                                     locals.payoutEntry.payoutType = QRWA_PAYOUT_TYPE_DEDICATED_QRWA;
@@ -2218,10 +2234,13 @@ public:
                     }
                 }
 
-                // Update per-pool payout timestamps / ticks
-                if (locals.poolAReady == 1) { state.mLastPayoutTimePoolA = locals.now; state.mLastPayoutTickPoolA = qpi.tick(); }
-                if (locals.poolBReady == 1) { state.mLastPayoutTimePoolB = locals.now; state.mLastPayoutTickPoolB = qpi.tick(); }
-                if (locals.poolCReady == 1) { state.mLastPayoutTimePoolC = locals.now; state.mLastPayoutTickPoolC = qpi.tick(); }
+                // Update per-pool payout timestamps / ticks — only when pool actually had revenue
+                if (locals.poolAHadRevenue == 1)
+                { state.mLastPayoutTimePoolA = locals.now; state.mLastPayoutTickPoolA = qpi.tick(); }
+                if (locals.poolBHadRevenue == 1)
+                { state.mLastPayoutTimePoolB = locals.now; state.mLastPayoutTickPoolB = qpi.tick(); }
+                if (locals.poolCHadRevenue == 1)
+                { state.mLastPayoutTimePoolC = locals.now; state.mLastPayoutTickPoolC = qpi.tick(); }
                 locals.logger.logType = QRWA_LOG_TYPE_DISTRIBUTION;
                 locals.logger.primaryId = NULL_ID;
                 locals.logger.valueA = locals.poolAReady + locals.poolBReady * 2 + locals.poolCReady * 4; // bitmask: A=1, B=2, C=4
