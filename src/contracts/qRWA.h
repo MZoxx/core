@@ -20,13 +20,17 @@ constexpr uint64 QRWA_QMINE_PER_QRWA_SHARE_MIN = 100000ULL;
 constexpr uint64 QRWA_CONTRACT_ASSET_NAME = 1096241745ULL; // assetNameFromString("QRWA")
 
 // Payout Timing Constants
-// Production: FRIDAY, per-pool staggered schedule, 6-day min interval
-// Testnet:    any day, all pools at 06:20 UTC, 1h min interval
+// Testnet: UTC 21:10, any day, 1h min interval
+// Production: UTC time-based (Friday, per-pool staggered schedule, 6-day min interval)
+constexpr uint32 QRWA_USE_TICK_BASED_PAYOUT = 0;     // 0=UTC-based | 1=tick-based
+constexpr uint32 QRWA_PAYOUT_TICK_INTERVAL = 10;     // Every 10 ticks (only when tick-based)
+
+// UTC-based constants
 constexpr uint64 QRWA_PAYOUT_DAY = FRIDAY;
-constexpr uint64 QRWA_PAYOUT_HOUR_POOL_A = 7;       // Qubic Mining  | Production: 12
-constexpr uint64 QRWA_PAYOUT_HOUR_POOL_B = 7;       // SC Assets     | Production: 14
-constexpr uint64 QRWA_PAYOUT_HOUR_POOL_C = 7;       // BTC Mining    | Production: 13
-constexpr uint64 QRWA_PAYOUT_MINUTE = 0;             // Trigger at :00 | Production: 0
+constexpr uint64 QRWA_PAYOUT_HOUR_POOL_A = 21;      // Qubic Mining  | Production: 12
+constexpr uint64 QRWA_PAYOUT_HOUR_POOL_B = 21;      // SC Assets     | Production: 14
+constexpr uint64 QRWA_PAYOUT_HOUR_POOL_C = 21;      // BTC Mining    | Production: 13
+constexpr uint64 QRWA_PAYOUT_MINUTE = 10;            // Trigger at :10 | Production: 0
 constexpr uint64 QRWA_CHECK_DAY_OF_WEEK = 0;         // 0=any day (Testnet) | Production: 1
 constexpr uint64 QRWA_MIN_PAYOUT_INTERVAL_MS = 3600000ULL; // 1h (Testnet) | Production: 6 * 86400000ULL (6 days)
 
@@ -204,10 +208,16 @@ protected:
     HashMap<QRWAAsset, uint64, QRWA_MAX_ASSETS> mGeneralAssetBalances; // Balances for other assets (e.g., SC shares)
     HashMap<id, uint64, QRWA_MAX_ASSETS> mScDividendTracker; // SC contract ID → cumulative dividends received (routed to Pool B)
 
-    // Per-pool payout timestamps (UTC time-based)
+    // Per-pool payout timestamps (UTC time-based, used when QRWA_USE_TICK_BASED_PAYOUT == 0)
     DateAndTime mLastPayoutTimePoolA; // Pool A (Qubic Mining)
     DateAndTime mLastPayoutTimePoolB; // Pool B (SC Assets)
     DateAndTime mLastPayoutTimePoolC; // Pool C (BTC Mining)
+
+    // Per-pool payout tick tracking (used when QRWA_USE_TICK_BASED_PAYOUT == 1)
+    uint32 mLastPayoutTickPoolA;
+    uint32 mLastPayoutTickPoolB;
+    uint32 mLastPayoutTickPoolC;
+    uint32 _paddingTick; // Alignment padding
 
     // Revenue Pools (incoming, before splitting into QMINE/qRWA)
     uint64 mRevenuePoolA; // Mined funds from Qubic farm (from SCs) — gov fees deducted first
@@ -230,6 +240,9 @@ protected:
 
     // Fundraising address — excluded from ALL distributions
     id mFundraisingAddress;
+
+    // Exchange address (safe.trade) — excluded from ALL distributions
+    id mExchangeAddress;
 
     // Per-pool total distributed tracking
     uint64 mTotalPoolADistributed;
@@ -848,12 +861,14 @@ public:
         id dedicatedRevenueAddress;
         id poolARevenueAddress;
         id fundraisingAddress;
+        id exchangeAddress;
     };
     PUBLIC_FUNCTION(GetContractAddresses)
     {
         output.dedicatedRevenueAddress = state.mDedicatedRevenueAddress;
         output.poolARevenueAddress = state.mPoolARevenueAddress;
         output.fundraisingAddress = state.mFundraisingAddress;
+        output.exchangeAddress = state.mExchangeAddress;
     }
 
 
@@ -1126,6 +1141,9 @@ public:
         setMemory(state.mLastPayoutTimePoolA, 0);
         setMemory(state.mLastPayoutTimePoolB, 0);
         setMemory(state.mLastPayoutTimePoolC, 0);
+        state.mLastPayoutTickPoolA = 0;
+        state.mLastPayoutTickPoolB = 0;
+        state.mLastPayoutTickPoolC = 0;
 
         // Initialize default governance parameters
         state.mCurrentGovParams.mAdminAddress = ID(
@@ -1198,6 +1216,15 @@ public:
             _P, _C, _T, _G, _C, _A, _F, _B
         );
 
+        // Exchange address (safe.trade) — excluded from ALL distributions
+        // CLJHHZVRWAVBEAECXMCEIZOZOJLAMWCQMNYXXHQXOBGRUCXKVZCMBQECQJPE
+        state.mExchangeAddress = ID(
+            _C, _L, _J, _H, _H, _Z, _V, _R, _W, _A, _V, _B, _E, _A, _E, _C,
+            _X, _M, _C, _E, _I, _Z, _O, _Z, _O, _J, _L, _A, _M, _W, _C, _Q,
+            _M, _N, _Y, _X, _X, _H, _Q, _X, _O, _B, _G, _R, _U, _C, _X, _K,
+            _V, _Z, _C, _M, _B, _Q, _E, _C
+        );
+
         // Pool A revenue address (Mining / QMINE issuer)
         // Production: QMINEQQXYBEGBHNSUPOUYDIQKZPCBPQIIHUUZMCPLBPCCAIARVZBTYKGFCWM
         // Testnet: IZNUAVRCTNYBQBSFYWBBPQUXASPCYDZYKFFULCEGLCFCEQPTLDTKZQMENKRN
@@ -1263,6 +1290,17 @@ public:
                 );
             }
 
+            // auto-initialize mExchangeAddress if not set
+            if (state.mExchangeAddress == NULL_ID)
+            {
+                state.mExchangeAddress = ID(
+                    _C, _L, _J, _H, _H, _Z, _V, _R, _W, _A, _V, _B, _E, _A, _E, _C,
+                    _X, _M, _C, _E, _I, _Z, _O, _Z, _O, _J, _L, _A, _M, _W, _C, _Q,
+                    _M, _N, _Y, _X, _X, _H, _Q, _X, _O, _B, _G, _R, _U, _C, _X, _K,
+                    _V, _Z, _C, _M, _B, _Q, _E, _C
+                );
+            }
+
             // update mDedicatedRevenueAddress to new Pool C address
             // Testnet: WFCELJRTMTYEGHNTYONQOWVQIUYBVBPTSIRCOTJUXFIQAQPEYJQGQQSAVDDM
             locals.newDedicatedAddr = ID(
@@ -1297,6 +1335,11 @@ public:
                 }
                 // Exclude fundraising address from all distributions
                 if (state.mFundraisingAddress != NULL_ID && locals.iter.possessor() == state.mFundraisingAddress)
+                {
+                    continue;
+                }
+                // Exclude exchange address (safe.trade) from all distributions
+                if (state.mExchangeAddress != NULL_ID && locals.iter.possessor() == state.mExchangeAddress)
                 {
                     continue;
                 }
@@ -1381,6 +1424,11 @@ public:
                 }
                 // Exclude fundraising address from all distributions
                 if (state.mFundraisingAddress != NULL_ID && locals.iter.possessor() == state.mFundraisingAddress)
+                {
+                    continue;
+                }
+                // Exclude exchange address (safe.trade) from all distributions
+                if (state.mExchangeAddress != NULL_ID && locals.iter.possessor() == state.mExchangeAddress)
                 {
                     continue;
                 }
@@ -1612,72 +1660,90 @@ public:
     {
         locals.now = qpi.now();
 
-        // ── Per-pool UTC time-based payout scheduling ──
-        // Production: check day-of-week (Friday), per-pool hour, 6-day min interval
-        // Testnet:    skip day check, all pools at same hour+minute, 1h min interval
+        // ── Per-pool payout scheduling ──
         locals.poolAReady = 0;
         locals.poolBReady = 0;
         locals.poolCReady = 0;
 
-        // Day-of-week gate (testnet: always passes)
-        locals.dayMatch = 1;
-        if (QRWA_CHECK_DAY_OF_WEEK == 1)
+        if (QRWA_USE_TICK_BASED_PAYOUT == 1)
         {
-            locals.dayMatch = (qpi.dayOfWeek(
-                (uint8)mod(locals.now.getYear(), (uint16)100),
-                locals.now.getMonth(),
-                locals.now.getDay()) == QRWA_PAYOUT_DAY) ? 1 : 0;
-        }
-
-        if (locals.dayMatch == 1)
-        {
-            // Pool A: Qubic Mining
-            if (locals.now.getHour() == QRWA_PAYOUT_HOUR_POOL_A && locals.now.getMinute() >= QRWA_PAYOUT_MINUTE)
+            // Tick-based payout: fire every QRWA_PAYOUT_TICK_INTERVAL ticks (Testnet)
+            if (qpi.tick() >= state.mLastPayoutTickPoolA + QRWA_PAYOUT_TICK_INTERVAL || state.mLastPayoutTickPoolA == 0)
             {
-                if (state.mLastPayoutTimePoolA.getYear() == 0)
+                locals.poolAReady = 1;
+            }
+            if (qpi.tick() >= state.mLastPayoutTickPoolB + QRWA_PAYOUT_TICK_INTERVAL || state.mLastPayoutTickPoolB == 0)
+            {
+                locals.poolBReady = 1;
+            }
+            if (qpi.tick() >= state.mLastPayoutTickPoolC + QRWA_PAYOUT_TICK_INTERVAL || state.mLastPayoutTickPoolC == 0)
+            {
+                locals.poolCReady = 1;
+            }
+        }
+        else
+        {
+            // UTC time-based payout scheduling (Production)
+            // Day-of-week gate (testnet: always passes)
+            locals.dayMatch = 1;
+            if (QRWA_CHECK_DAY_OF_WEEK == 1)
+            {
+                locals.dayMatch = (qpi.dayOfWeek(
+                    (uint8)mod(locals.now.getYear(), (uint16)100),
+                    locals.now.getMonth(),
+                    locals.now.getDay()) == QRWA_PAYOUT_DAY) ? 1 : 0;
+            }
+
+            if (locals.dayMatch == 1)
+            {
+                // Pool A: Qubic Mining
+                if (locals.now.getHour() == QRWA_PAYOUT_HOUR_POOL_A && locals.now.getMinute() >= QRWA_PAYOUT_MINUTE)
                 {
-                    locals.poolAReady = 1;
-                }
-                else
-                {
-                    locals.durationMicros = state.mLastPayoutTimePoolA.durationMicrosec(locals.now);
-                    if (locals.durationMicros / 1000 >= QRWA_MIN_PAYOUT_INTERVAL_MS)
+                    if (state.mLastPayoutTimePoolA.getYear() == 0)
                     {
                         locals.poolAReady = 1;
                     }
+                    else
+                    {
+                        locals.durationMicros = state.mLastPayoutTimePoolA.durationMicrosec(locals.now);
+                        if (locals.durationMicros / 1000 >= QRWA_MIN_PAYOUT_INTERVAL_MS)
+                        {
+                            locals.poolAReady = 1;
+                        }
+                    }
                 }
-            }
 
-            // Pool B: SC Assets
-            if (locals.now.getHour() == QRWA_PAYOUT_HOUR_POOL_B && locals.now.getMinute() >= QRWA_PAYOUT_MINUTE)
-            {
-                if (state.mLastPayoutTimePoolB.getYear() == 0)
+                // Pool B: SC Assets
+                if (locals.now.getHour() == QRWA_PAYOUT_HOUR_POOL_B && locals.now.getMinute() >= QRWA_PAYOUT_MINUTE)
                 {
-                    locals.poolBReady = 1;
-                }
-                else
-                {
-                    locals.durationMicros = state.mLastPayoutTimePoolB.durationMicrosec(locals.now);
-                    if (locals.durationMicros / 1000 >= QRWA_MIN_PAYOUT_INTERVAL_MS)
+                    if (state.mLastPayoutTimePoolB.getYear() == 0)
                     {
                         locals.poolBReady = 1;
                     }
+                    else
+                    {
+                        locals.durationMicros = state.mLastPayoutTimePoolB.durationMicrosec(locals.now);
+                        if (locals.durationMicros / 1000 >= QRWA_MIN_PAYOUT_INTERVAL_MS)
+                        {
+                            locals.poolBReady = 1;
+                        }
+                    }
                 }
-            }
 
-            // Pool C: BTC Mining
-            if (locals.now.getHour() == QRWA_PAYOUT_HOUR_POOL_C && locals.now.getMinute() >= QRWA_PAYOUT_MINUTE)
-            {
-                if (state.mLastPayoutTimePoolC.getYear() == 0)
+                // Pool C: BTC Mining
+                if (locals.now.getHour() == QRWA_PAYOUT_HOUR_POOL_C && locals.now.getMinute() >= QRWA_PAYOUT_MINUTE)
                 {
-                    locals.poolCReady = 1;
-                }
-                else
-                {
-                    locals.durationMicros = state.mLastPayoutTimePoolC.durationMicrosec(locals.now);
-                    if (locals.durationMicros / 1000 >= QRWA_MIN_PAYOUT_INTERVAL_MS)
+                    if (state.mLastPayoutTimePoolC.getYear() == 0)
                     {
                         locals.poolCReady = 1;
+                    }
+                    else
+                    {
+                        locals.durationMicros = state.mLastPayoutTimePoolC.durationMicrosec(locals.now);
+                        if (locals.durationMicros / 1000 >= QRWA_MIN_PAYOUT_INTERVAL_MS)
+                        {
+                            locals.poolCReady = 1;
+                        }
                     }
                 }
             }
@@ -1802,6 +1868,10 @@ public:
                         locals.beginBalance = state.mPayoutBeginBalances.value(locals.qminePayoutIndex);
 
                         if (state.mFundraisingAddress != NULL_ID && locals.holder == state.mFundraisingAddress)
+                        {
+                            continue;
+                        }
+                        if (state.mExchangeAddress != NULL_ID && locals.holder == state.mExchangeAddress)
                         {
                             continue;
                         }
@@ -1961,6 +2031,7 @@ public:
                         locals.holder = locals.qrwaIter.possessor();
                         if (locals.holder == SELF) continue;
                         if (state.mFundraisingAddress != NULL_ID && locals.holder == state.mFundraisingAddress) continue;
+                        if (state.mExchangeAddress != NULL_ID && locals.holder == state.mExchangeAddress) continue;
                         locals.eligibleShares = sadd(locals.eligibleShares, locals.qrwaShares);
                     }
 
@@ -1982,6 +2053,7 @@ public:
                                 locals.holder = locals.qrwaIter.possessor();
                                 if (locals.holder == SELF) continue;
                                 if (state.mFundraisingAddress != NULL_ID && locals.holder == state.mFundraisingAddress) continue;
+                                if (state.mExchangeAddress != NULL_ID && locals.holder == state.mExchangeAddress) continue;
 
                                 // Pool A qRWA payout
                                 if (locals.poolAAmountPerShare > 0)
@@ -2072,6 +2144,7 @@ public:
                         locals.holder = locals.qrwaIter.possessor();
                         if (locals.holder == SELF) continue;
                         if (state.mFundraisingAddress != NULL_ID && locals.holder == state.mFundraisingAddress) continue;
+                        if (state.mExchangeAddress != NULL_ID && locals.holder == state.mExchangeAddress) continue;
 
                         locals.qmineBalance = qpi.numberOfShares(
                             state.mQmineAsset,
@@ -2100,6 +2173,7 @@ public:
                                 locals.holder = locals.qrwaIter.possessor();
                                 if (locals.holder == SELF) continue;
                                 if (state.mFundraisingAddress != NULL_ID && locals.holder == state.mFundraisingAddress) continue;
+                                if (state.mExchangeAddress != NULL_ID && locals.holder == state.mExchangeAddress) continue;
 
                                 locals.qmineBalance = qpi.numberOfShares(
                                     state.mQmineAsset,
@@ -2144,10 +2218,10 @@ public:
                     }
                 }
 
-                // Update per-pool payout timestamps
-                if (locals.poolAReady == 1) state.mLastPayoutTimePoolA = locals.now;
-                if (locals.poolBReady == 1) state.mLastPayoutTimePoolB = locals.now;
-                if (locals.poolCReady == 1) state.mLastPayoutTimePoolC = locals.now;
+                // Update per-pool payout timestamps / ticks
+                if (locals.poolAReady == 1) { state.mLastPayoutTimePoolA = locals.now; state.mLastPayoutTickPoolA = qpi.tick(); }
+                if (locals.poolBReady == 1) { state.mLastPayoutTimePoolB = locals.now; state.mLastPayoutTickPoolB = qpi.tick(); }
+                if (locals.poolCReady == 1) { state.mLastPayoutTimePoolC = locals.now; state.mLastPayoutTickPoolC = qpi.tick(); }
                 locals.logger.logType = QRWA_LOG_TYPE_DISTRIBUTION;
                 locals.logger.primaryId = NULL_ID;
                 locals.logger.valueA = locals.poolAReady + locals.poolBReady * 2 + locals.poolCReady * 4; // bitmask: A=1, B=2, C=4
