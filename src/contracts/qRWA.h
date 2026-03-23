@@ -22,7 +22,7 @@ constexpr uint64 QRWA_CONTRACT_ASSET_NAME = 1096241745ULL; // assetNameFromStrin
 // Payout Timing Constants
 // Testnet: UTC 21:10, any day, 1h min interval
 // Production: UTC time-based (Friday, per-pool staggered schedule, 6-day min interval)
-constexpr uint32 QRWA_USE_TICK_BASED_PAYOUT = 0;     // 0=UTC-based | 1=tick-based
+constexpr uint32 QRWA_USE_TICK_BASED_PAYOUT = 1;     // 0=UTC-based | 1=tick-based
 constexpr uint32 QRWA_PAYOUT_TICK_INTERVAL = 10;     // Every 10 ticks (only when tick-based)
 
 // UTC-based constants
