@@ -1436,9 +1436,15 @@ public:
             }
 
             // auto-initialize mPoolDRevenueAddress if not set
+            // Testnet: ZPLFZLFXCAXNZFTNPVWUILAONJNBLDJDHOUINKEYXBVITADMWGXHHQEGKYEC
             if (state.mPoolDRevenueAddress == NULL_ID)
             {
-                state.mPoolDRevenueAddress = NULL_ID; // Pool D address must be set via SetPoolDRevenueAddress
+                state.mPoolDRevenueAddress = ID(
+                    _Z, _P, _L, _F, _Z, _L, _F, _X, _C, _A, _X, _N, _Z, _F, _T, _N,
+                    _P, _V, _W, _U, _I, _L, _A, _O, _N, _J, _N, _B, _L, _D, _J, _D,
+                    _H, _O, _U, _I, _N, _K, _E, _Y, _X, _B, _V, _I, _T, _A, _D, _M,
+                    _W, _G, _X, _H, _H, _Q, _E, _G
+                );
             }
         }
 
