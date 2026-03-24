@@ -1091,28 +1091,4 @@ struct QRACEL : public ContractBase
             }
         }
     }
-
-    PRE_ACQUIRE_SHARES()
-    {
-    }
-
-    POST_ACQUIRE_SHARES()
-    {
-    }
-
-    PRE_RELEASE_SHARES()
-    {
-    }
-
-    POST_RELEASE_SHARES()
-    {
-    }
-
-    POST_INCOMING_TRANSFER()
-    {
-    }
-
-    EXPAND()
-    {
-    }
 };

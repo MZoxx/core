@@ -278,6 +278,16 @@
 
 #endif
 
+#undef CONTRACT_INDEX
+#undef CONTRACT_STATE_TYPE
+#undef CONTRACT_STATE2_TYPE
+
+#define QRACEL_CONTRACT_INDEX 27
+#define CONTRACT_INDEX QRACEL_CONTRACT_INDEX
+#define CONTRACT_STATE_TYPE QRACEL
+#define CONTRACT_STATE2_TYPE QRACEL2
+#include "contracts/qRacel.h"
+
 // new contracts should be added above this line
 
 #ifdef INCLUDE_CONTRACT_TEST_EXAMPLES
@@ -392,6 +402,7 @@ constexpr struct ContractDescription
 #ifndef NO_QSURV
 	{"QSURV", 207, 10000, sizeof(QSURV::StateData)}, // proposal in epoch 205, IPO in 206, construction and first use in 207
 #endif
+    {"QRACEL", 204, 10000, sizeof(QRACEL::StateData)},
 
     // new contracts should be added above this line
 #ifdef INCLUDE_CONTRACT_TEST_EXAMPLES
@@ -517,6 +528,7 @@ static void initializeContracts()
 #ifndef NO_QSURV
 	REGISTER_CONTRACT_FUNCTIONS_AND_PROCEDURES(QSURV);
 #endif
+    REGISTER_CONTRACT_FUNCTIONS_AND_PROCEDURES(QRACEL);
     // new contracts should be added above this line
 #ifdef INCLUDE_CONTRACT_TEST_EXAMPLES
     REGISTER_CONTRACT_FUNCTIONS_AND_PROCEDURES(TESTEXA);
