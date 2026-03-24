@@ -28,7 +28,7 @@ static const unsigned char whiteListPeers[][4] = {
 */
 
 static const unsigned char oracleMachineIPs[][4] = {
-     {127, 0, 0, 1}, // REMOVE THIS ENTRY AND REPLACE IT WITH YOUR OWN IP ADDRESSES
+     {10, 0, 2, 2}, // VBox NAT gateway -> host where oracle_machine.py runs
 };
 
 #define ENABLE_QUBIC_LOGGING_EVENT 0 // turn on logging events
