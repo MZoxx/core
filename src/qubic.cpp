@@ -5849,6 +5849,13 @@ static bool loadContractStateFiles(CHAR16* directory, bool forceLoadFromFile)
                     setMem(contractStates[contractIndex], contractDescriptions[contractIndex].stateSize, 0);
                     appendText(message, L" not loaded but initialized with zeros for IPO");
                 }
+#if START_NETWORK_FROM_SCRATCH
+                else
+                {
+                    setMem(contractStates[contractIndex], contractDescriptions[contractIndex].stateSize, 0);
+                    appendText(message, L" not loaded but initialized with zeros (start from scratch)");
+                }
+#else
                 else
                 {
                     appendText(message, L" cannot be read successfully");
@@ -5856,6 +5863,7 @@ static bool loadContractStateFiles(CHAR16* directory, bool forceLoadFromFile)
                     logStatusToConsole(L"EFI_FILE_PROTOCOL.Read() reads invalid number of bytes", loadedSize, __LINE__);
                     return false;
                 }
+#endif
             }
             logToConsole(message);
         }
