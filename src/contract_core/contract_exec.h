@@ -209,8 +209,12 @@ static void initializeContractErrors()
 #endif
     // At initialization, all contract errors are set to 0 (= no error).
     // If IPO failed (number of contract shares in universe != NUMBER_OF_COMPUTERS), the error status needs to be set accordingly.
+    // Skip contracts being constructed this epoch (constructionEpoch == system.epoch) because their shares
+    // are created during IPO in the prior epoch and may not exist yet (especially with START_NETWORK_FROM_SCRATCH).
     for (unsigned int contractIndex = 1; contractIndex < endIndex; ++contractIndex)
     {
+        if (contractDescriptions[contractIndex].constructionEpoch == system.epoch)
+            continue;
         long long numShares = numberOfShares({ m256i::zero(), *(uint64*)contractDescriptions[contractIndex].assetName });
         if (numShares != NUMBER_OF_COMPUTORS)
             contractError[contractIndex] = ContractErrorIPOFailed;
