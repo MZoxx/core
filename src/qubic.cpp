@@ -5696,10 +5696,16 @@ static bool loadContractStateFiles(CHAR16* directory, bool forceLoadFromFile)
                 }
                 else
                 {
+#if START_NETWORK_FROM_SCRATCH
+                    setMem(contractStates[contractIndex], contractDescriptions[contractIndex].stateSize, 0);
+                    appendText(message, L" size mismatch but zero-initialized (START_NETWORK_FROM_SCRATCH)");
+                    logToConsole(message);
+#else
                     appendText(message, L" cannot be read successfully");
                     logToConsole(message);
                     logStatusToConsole(L"EFI_FILE_PROTOCOL.Read() reads invalid number of bytes", loadedSize, __LINE__);
                     return false;
+#endif
                 }
             }
             logToConsole(message);
