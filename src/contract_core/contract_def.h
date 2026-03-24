@@ -402,7 +402,7 @@ constexpr struct ContractDescription
 #ifndef NO_QSURV
 	{"QSURV", 207, 10000, sizeof(QSURV::StateData)}, // proposal in epoch 205, IPO in 206, construction and first use in 207
 #endif
-    {"QRACEL", 204, 10000, sizeof(QRACEL::StateData)},
+    {"QRACEL", 206, 10000, sizeof(QRACEL::StateData)},
 
     // new contracts should be added above this line
 #ifdef INCLUDE_CONTRACT_TEST_EXAMPLES
