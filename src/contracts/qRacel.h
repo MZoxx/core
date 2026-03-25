@@ -31,6 +31,7 @@ constexpr uint8 QRACEL_QUERY_PHASE_END = 2;
 
 constexpr uint32 QRACEL_ORACLE_TIMEOUT_MS = 120000;
 constexpr uint32 QRACEL_ORACLE_RETRY_TICKS = 30;
+constexpr uint32 QRACEL_NO_ROUND = 0xFFFFFFFFU;
 
 constexpr uint8 QRACEL_STATUS_SUCCESS = 1;
 constexpr uint8 QRACEL_STATUS_NOT_AUTHORIZED = 2;
@@ -165,7 +166,7 @@ struct QRACEL : public ContractBase
 
     struct SetAutoCreate_input
     {
-        bit autoCreate;
+        uint8 autoCreate;
         uint8 _pad0;
         uint16 _pad1;
         uint32 _pad2;
@@ -332,7 +333,7 @@ struct QRACEL : public ContractBase
     {
         id admin;
         id oracleId;
-        bit autoCreate;
+        uint8 autoCreate;
         uint8 _pad0;
         uint16 _pad1;
         uint32 _pad2;
@@ -503,7 +504,7 @@ struct QRACEL : public ContractBase
 
         locals.durationIndex = durationToIndex(input.durationType);
         state.mut().dbgActiveRaw = state.get().activeRoundByDuration.get(locals.durationIndex);
-        if (state.get().activeRoundByDuration.get(locals.durationIndex) != NULL_INDEX)
+        if (state.get().activeRoundByDuration.get(locals.durationIndex) != QRACEL_NO_ROUND)
         {
             state.mut().dbgLastStatus = 3;
             output.status = QRACEL_STATUS_ALREADY_ACTIVE;
@@ -828,7 +829,7 @@ struct QRACEL : public ContractBase
                 locals.durationIndex = durationToIndex(locals.round.durationType);
                 if (locals.durationIndex < QRACEL_DURATION_COUNT && state.get().activeRoundByDuration.get(locals.durationIndex) == locals.queryContext.roundIndex)
                 {
-                    state.mut().activeRoundByDuration.set(locals.durationIndex, NULL_INDEX);
+                    state.mut().activeRoundByDuration.set(locals.durationIndex, QRACEL_NO_ROUND);
                 }
             }
             else
@@ -948,19 +949,19 @@ struct QRACEL : public ContractBase
         output.dbgEndTickAutoCreates = state.get().dbgEndTickAutoCreates;
 
         locals.idx = state.get().activeRoundByDuration.get(durationToIndex(QRACEL_DURATION_10M));
-        if (locals.idx != NULL_INDEX && locals.idx < state.get().roundCount)
+        if (locals.idx != QRACEL_NO_ROUND && locals.idx < state.get().roundCount)
             output.activeRound10m = state.get().rounds.get(locals.idx).roundId;
 
         locals.idx = state.get().activeRoundByDuration.get(durationToIndex(QRACEL_DURATION_60M));
-        if (locals.idx != NULL_INDEX && locals.idx < state.get().roundCount)
+        if (locals.idx != QRACEL_NO_ROUND && locals.idx < state.get().roundCount)
             output.activeRound60m = state.get().rounds.get(locals.idx).roundId;
 
         locals.idx = state.get().activeRoundByDuration.get(durationToIndex(QRACEL_DURATION_6H));
-        if (locals.idx != NULL_INDEX && locals.idx < state.get().roundCount)
+        if (locals.idx != QRACEL_NO_ROUND && locals.idx < state.get().roundCount)
             output.activeRound6h = state.get().rounds.get(locals.idx).roundId;
 
         locals.idx = state.get().activeRoundByDuration.get(durationToIndex(QRACEL_DURATION_24H));
-        if (locals.idx != NULL_INDEX && locals.idx < state.get().roundCount)
+        if (locals.idx != QRACEL_NO_ROUND && locals.idx < state.get().roundCount)
             output.activeRound24h = state.get().rounds.get(locals.idx).roundId;
     }
 
@@ -978,7 +979,7 @@ struct QRACEL : public ContractBase
 
         locals.durationIndex = durationToIndex(input.durationType);
         locals.roundIndex = state.get().activeRoundByDuration.get(locals.durationIndex);
-        if (locals.roundIndex == NULL_INDEX || locals.roundIndex >= state.get().roundCount)
+        if (locals.roundIndex == QRACEL_NO_ROUND || locals.roundIndex >= state.get().roundCount)
             return;
 
         locals.round = state.get().rounds.get(locals.roundIndex);
@@ -1013,7 +1014,7 @@ struct QRACEL : public ContractBase
 
         for (locals.i = 0; locals.i < QRACEL_DURATION_COUNT; ++locals.i)
         {
-            state.mut().activeRoundByDuration.set(locals.i, NULL_INDEX);
+            state.mut().activeRoundByDuration.set(locals.i, QRACEL_NO_ROUND);
         }
     }
 
@@ -1038,9 +1039,9 @@ struct QRACEL : public ContractBase
             locals.durationIndex = locals.i;
             locals.roundIndex = state.get().activeRoundByDuration.get(locals.durationIndex);
 
-            if (locals.roundIndex == NULL_INDEX)
+            if (locals.roundIndex == QRACEL_NO_ROUND)
             {
-                if (!state.get().autoCreate)
+                if (!(state.get().autoCreate & (1 << locals.durationIndex)))
                     continue;
 
                 if (state.get().roundCount >= QRACEL_MAX_ROUNDS)
@@ -1096,7 +1097,7 @@ struct QRACEL : public ContractBase
 
             if (locals.roundIndex >= state.get().roundCount)
             {
-                state.mut().activeRoundByDuration.set(locals.durationIndex, NULL_INDEX);
+                state.mut().activeRoundByDuration.set(locals.durationIndex, QRACEL_NO_ROUND);
                 continue;
             }
 
