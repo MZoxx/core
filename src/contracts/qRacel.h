@@ -1047,6 +1047,18 @@ struct QRACEL : public ContractBase
                 if (state.get().roundCount >= QRACEL_MAX_ROUNDS)
                     continue;
 
+                // Only auto-create at clean time boundaries:
+                // 10m -> minute % 10 == 0, 60m -> minute == 0,
+                // 6h  -> minute == 0 && hour % 6 == 0, 24h -> minute == 0 && hour == 0
+                if (locals.durationType == QRACEL_DURATION_10M && (qpi.minute() % 10) != 0)
+                    continue;
+                if (locals.durationType == QRACEL_DURATION_60M && qpi.minute() != 0)
+                    continue;
+                if (locals.durationType == QRACEL_DURATION_6H && (qpi.minute() != 0 || (qpi.hour() % 6) != 0))
+                    continue;
+                if (locals.durationType == QRACEL_DURATION_24H && (qpi.minute() != 0 || qpi.hour() != 0))
+                    continue;
+
                 locals.durationTicks = durationToTicks(locals.durationType);
                 if (locals.durationTicks == 0)
                     continue;
