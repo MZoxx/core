@@ -1226,13 +1226,13 @@ struct QRACEL : public ContractBase
                     continue;
 
                 // Only auto-create at clean time boundaries:
-                // 10m -> minute % 10 == 0, 60m -> minute == 0,
-                // 6h  -> minute == 0 && hour % 6 == 0, 24h -> minute == 0 && hour == 0
-                if (locals.durationType == QRACEL_DURATION_10M && (qpi.minute() % 10) != 0)
+                // 10m -> mod(minute,10) == 0, 60m -> minute == 0,
+                // 6h  -> minute == 0 && mod(hour,6) == 0, 24h -> minute == 0 && hour == 0
+                if (locals.durationType == QRACEL_DURATION_10M && mod(qpi.minute(), 10) != 0)
                     continue;
                 if (locals.durationType == QRACEL_DURATION_60M && qpi.minute() != 0)
                     continue;
-                if (locals.durationType == QRACEL_DURATION_6H && (qpi.minute() != 0 || (qpi.hour() % 6) != 0))
+                if (locals.durationType == QRACEL_DURATION_6H && (qpi.minute() != 0 || mod(qpi.hour(), 6) != 0))
                     continue;
                 if (locals.durationType == QRACEL_DURATION_24H && (qpi.minute() != 0 || qpi.hour() != 0))
                     continue;
