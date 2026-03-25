@@ -11,11 +11,6 @@ constexpr uint8 QRACEL_DURATION_6H = 3;
 constexpr uint8 QRACEL_DURATION_24H = 4;
 constexpr uint8 QRACEL_DURATION_COUNT = 4;
 
-constexpr uint32 QRACEL_TICKS_10M = 600;
-constexpr uint32 QRACEL_TICKS_60M = 3600;
-constexpr uint32 QRACEL_TICKS_6H = 21600;
-constexpr uint32 QRACEL_TICKS_24H = 86400;
-
 constexpr uint8 QRACEL_SIDE_NONE = 0;
 constexpr uint8 QRACEL_SIDE_UP = 1;
 constexpr uint8 QRACEL_SIDE_DOWN = 2;
@@ -56,7 +51,6 @@ struct QRACEL : public ContractBase
     struct RoundData
     {
         uint64 roundId;
-        uint32 durationTicks;
         uint32 startTick;
         uint32 endTick;
         uint32 resolvedTick;
@@ -74,6 +68,10 @@ struct QRACEL : public ContractBase
         uint8 durationType;
         uint8 status;
         uint8 winningSide;
+        uint8 startHour;
+        uint8 startMinute;
+        uint8 endHour;
+        uint8 endMinute;
         uint8 _pad0;
     };
 
@@ -128,22 +126,52 @@ struct QRACEL : public ContractBase
         return durationType >= QRACEL_DURATION_10M && durationType <= QRACEL_DURATION_24H;
     }
 
-    static uint32 durationToTicks(uint8 durationType)
-    {
-        if (durationType == QRACEL_DURATION_10M)
-            return QRACEL_TICKS_10M;
-        if (durationType == QRACEL_DURATION_60M)
-            return QRACEL_TICKS_60M;
-        if (durationType == QRACEL_DURATION_6H)
-            return QRACEL_TICKS_6H;
-        if (durationType == QRACEL_DURATION_24H)
-            return QRACEL_TICKS_24H;
-        return 0;
-    }
-
     static uint32 durationToIndex(uint8 durationType)
     {
         return durationType - 1;
+    }
+
+    static void computeRoundEndTime(uint8 durationType, uint8 startHour, uint8 startMinute, uint8& endHour, uint8& endMinute)
+    {
+        endHour = startHour;
+        endMinute = startMinute;
+
+        if (durationType == QRACEL_DURATION_10M)
+        {
+            endMinute = startMinute + 10;
+            if (endMinute >= 60) { endMinute -= 60; endHour += 1; }
+        }
+        else if (durationType == QRACEL_DURATION_60M)
+        {
+            endHour = startHour + 1;
+            endMinute = 0;
+        }
+        else if (durationType == QRACEL_DURATION_6H)
+        {
+            endHour = startHour + 6;
+            endMinute = 0;
+        }
+        else // 24H
+        {
+            endMinute = 0;
+            endHour = startHour + 24;
+        }
+
+        if (endHour >= 24) endHour -= 24;
+    }
+
+    static bool isRoundTimeExpired(uint8 curH, uint8 curM, uint8 endH, uint8 endM, uint8 startH, uint8 startM)
+    {
+        uint16 cur = (uint16)curH * 60 + curM;
+        uint16 end = (uint16)endH * 60 + endM;
+        uint16 start = (uint16)startH * 60 + startM;
+
+        if (end > start)
+            return cur >= end;
+        else if (end < start)
+            return cur >= end && cur < start;
+        else
+            return false;
     }
 
     static void setupBtcUsdtQuery(const id& oracleId, const DateAndTime& timestamp, OI::Price::OracleQuery& query)
@@ -203,10 +231,10 @@ struct QRACEL : public ContractBase
     struct CreateRound_output
     {
         uint8 status;
+        uint8 endHour;
+        uint8 endMinute;
         uint8 _pad0;
-        uint16 _pad1;
         uint32 startTick;
-        uint32 endTick;
         uint64 roundId;
         sint64 startQueryId;
     };
@@ -214,7 +242,6 @@ struct QRACEL : public ContractBase
     {
         uint32 durationIndex;
         uint32 roundIndex;
-        uint32 durationTicks;
         RoundData round;
         OI::Price::OracleQuery query;
         sint64 queryId;
@@ -282,6 +309,10 @@ struct QRACEL : public ContractBase
         uint8 durationType;
         uint8 status;
         uint8 winningSide;
+        uint8 startHour;
+        uint8 startMinute;
+        uint8 endHour;
+        uint8 endMinute;
         uint32 startTick;
         uint32 endTick;
         uint32 resolvedTick;
@@ -373,6 +404,10 @@ struct QRACEL : public ContractBase
         uint8 found;
         uint8 durationType;
         uint8 status;
+        uint8 startHour;
+        uint8 startMinute;
+        uint8 endHour;
+        uint8 endMinute;
         uint8 _pad0;
         uint32 startTick;
         uint32 endTick;
@@ -407,7 +442,6 @@ struct QRACEL : public ContractBase
         uint8 durationType;
         uint32 durationIndex;
         uint32 roundIndex;
-        uint32 durationTicks;
         RoundData round;
         OI::Price::OracleQuery query;
         sint64 queryId;
@@ -484,7 +518,8 @@ struct QRACEL : public ContractBase
         output.status = QRACEL_STATUS_NOT_AUTHORIZED;
         output.roundId = 0;
         output.startTick = 0;
-        output.endTick = 0;
+        output.endHour = 0;
+        output.endMinute = 0;
         output.startQueryId = -1;
 
         state.mut().dbgCreateRoundCalls = state.get().dbgCreateRoundCalls + 1;
@@ -518,19 +553,10 @@ struct QRACEL : public ContractBase
             return;
         }
 
-        locals.durationTicks = durationToTicks(input.durationType);
-        if (locals.durationTicks == 0)
-        {
-            state.mut().dbgLastStatus = 5;
-            output.status = QRACEL_STATUS_INVALID_INPUT;
-            return;
-        }
-
         locals.roundIndex = state.get().roundCount;
         locals.round.roundId = state.get().nextRoundId + 1;
-        locals.round.durationTicks = locals.durationTicks;
         locals.round.startTick = qpi.tick();
-        locals.round.endTick = qpi.tick() + locals.durationTicks;
+        locals.round.endTick = 0;
         locals.round.resolvedTick = 0;
         locals.round.betCount = 0;
         locals.round.upPool = 0;
@@ -546,6 +572,9 @@ struct QRACEL : public ContractBase
         locals.round.durationType = input.durationType;
         locals.round.status = QRACEL_ROUND_WAIT_START;
         locals.round.winningSide = QRACEL_SIDE_NONE;
+        locals.round.startHour = qpi.hour();
+        locals.round.startMinute = qpi.minute();
+        computeRoundEndTime(input.durationType, qpi.hour(), qpi.minute(), locals.round.endHour, locals.round.endMinute);
         locals.round._pad0 = 0;
 
         setupBtcUsdtQuery(state.get().oracleId, qpi.now(), locals.query);
@@ -575,7 +604,8 @@ struct QRACEL : public ContractBase
 
         output.roundId = locals.round.roundId;
         output.startTick = locals.round.startTick;
-        output.endTick = locals.round.endTick;
+        output.endHour = locals.round.endHour;
+        output.endMinute = locals.round.endMinute;
         output.startQueryId = locals.queryId;
         output.status = QRACEL_STATUS_SUCCESS;
     }
@@ -628,7 +658,7 @@ struct QRACEL : public ContractBase
         }
 
         locals.round = state.get().rounds.get(locals.roundIndex);
-        if (locals.round.status != QRACEL_ROUND_OPEN || qpi.tick() >= locals.round.endTick)
+        if (locals.round.status != QRACEL_ROUND_OPEN || isRoundTimeExpired(qpi.hour(), qpi.minute(), locals.round.endHour, locals.round.endMinute, locals.round.startHour, locals.round.startMinute))
         {
             qpi.transfer(qpi.invocator(), locals.reward);
             output.status = QRACEL_STATUS_ROUND_NOT_OPEN;
@@ -799,6 +829,7 @@ struct QRACEL : public ContractBase
             locals.round.endQueryId = 0;
             if (input.status == ORACLE_QUERY_STATUS_SUCCESS && OI::Price::replyIsValid(input.reply))
             {
+                locals.round.endTick = qpi.tick();
                 locals.round.endNumerator = input.reply.numerator;
                 locals.round.endDenominator = input.reply.denominator;
 
@@ -848,6 +879,10 @@ struct QRACEL : public ContractBase
         output.durationType = 0;
         output.status = 0;
         output.winningSide = QRACEL_SIDE_NONE;
+        output.startHour = 0;
+        output.startMinute = 0;
+        output.endHour = 0;
+        output.endMinute = 0;
         output.startTick = 0;
         output.endTick = 0;
         output.resolvedTick = 0;
@@ -873,6 +908,10 @@ struct QRACEL : public ContractBase
         output.durationType = locals.round.durationType;
         output.status = locals.round.status;
         output.winningSide = locals.round.winningSide;
+        output.startHour = locals.round.startHour;
+        output.startMinute = locals.round.startMinute;
+        output.endHour = locals.round.endHour;
+        output.endMinute = locals.round.endMinute;
         output.startTick = locals.round.startTick;
         output.endTick = locals.round.endTick;
         output.resolvedTick = locals.round.resolvedTick;
@@ -970,6 +1009,10 @@ struct QRACEL : public ContractBase
         output.found = 0;
         output.durationType = input.durationType;
         output.status = 0;
+        output.startHour = 0;
+        output.startMinute = 0;
+        output.endHour = 0;
+        output.endMinute = 0;
         output.startTick = 0;
         output.endTick = 0;
         output.roundId = 0;
@@ -986,6 +1029,10 @@ struct QRACEL : public ContractBase
         output.found = 1;
         output.durationType = locals.round.durationType;
         output.status = locals.round.status;
+        output.startHour = locals.round.startHour;
+        output.startMinute = locals.round.startMinute;
+        output.endHour = locals.round.endHour;
+        output.endMinute = locals.round.endMinute;
         output.startTick = locals.round.startTick;
         output.endTick = locals.round.endTick;
         output.roundId = locals.round.roundId;
@@ -1059,15 +1106,10 @@ struct QRACEL : public ContractBase
                 if (locals.durationType == QRACEL_DURATION_24H && (qpi.minute() != 0 || qpi.hour() != 0))
                     continue;
 
-                locals.durationTicks = durationToTicks(locals.durationType);
-                if (locals.durationTicks == 0)
-                    continue;
-
                 locals.roundIndex = state.get().roundCount;
                 locals.round.roundId = state.get().nextRoundId + 1;
-                locals.round.durationTicks = locals.durationTicks;
                 locals.round.startTick = qpi.tick();
-                locals.round.endTick = qpi.tick() + locals.durationTicks;
+                locals.round.endTick = 0;
                 locals.round.resolvedTick = 0;
                 locals.round.betCount = 0;
                 locals.round.upPool = 0;
@@ -1083,6 +1125,9 @@ struct QRACEL : public ContractBase
                 locals.round.durationType = locals.durationType;
                 locals.round.status = QRACEL_ROUND_WAIT_START;
                 locals.round.winningSide = QRACEL_SIDE_NONE;
+                locals.round.startHour = qpi.hour();
+                locals.round.startMinute = qpi.minute();
+                computeRoundEndTime(locals.durationType, qpi.hour(), qpi.minute(), locals.round.endHour, locals.round.endMinute);
                 locals.round._pad0 = 0;
 
                 setupBtcUsdtQuery(state.get().oracleId, qpi.now(), locals.query);
@@ -1138,7 +1183,7 @@ struct QRACEL : public ContractBase
             }
 
             if ((locals.round.status == QRACEL_ROUND_OPEN || locals.round.status == QRACEL_ROUND_WAIT_END)
-                && qpi.tick() >= locals.round.endTick
+                && isRoundTimeExpired(qpi.hour(), qpi.minute(), locals.round.endHour, locals.round.endMinute, locals.round.startHour, locals.round.startMinute)
                 && locals.round.endQueryId == 0
                 && (locals.round.status != QRACEL_ROUND_WAIT_END || qpi.tick() >= locals.round.nextOracleRetryTick))
             {
