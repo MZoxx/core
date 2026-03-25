@@ -99,7 +99,7 @@ struct QRACEL : public ContractBase
     {
         id admin;
         id oracleId;
-        bit autoCreate;
+        uint8 autoCreate;
         uint8 _pad0;
         uint16 _pad1;
         uint32 _pad2;
