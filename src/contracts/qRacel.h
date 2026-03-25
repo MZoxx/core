@@ -167,23 +167,16 @@ struct QRACEL : public ContractBase
 
     static bool hasTimeArrived(uint8 curH, uint8 curM, uint8 targetH, uint8 targetM)
     {
-        uint16 cur = (uint16)curH * 60 + curM;
-        uint16 target = (uint16)targetH * 60 + targetM;
-        return cur >= target;
+        return ((uint16)curH * 60 + curM) >= ((uint16)targetH * 60 + targetM);
     }
 
     static bool isRoundTimeExpired(uint8 curH, uint8 curM, uint8 endH, uint8 endM, uint8 startH, uint8 startM)
     {
-        uint16 cur = (uint16)curH * 60 + curM;
-        uint16 end = (uint16)endH * 60 + endM;
-        uint16 start = (uint16)startH * 60 + startM;
-
-        if (end > start)
-            return cur >= end;
-        else if (end < start)
-            return cur >= end && cur < start;
-        else
-            return false;
+        if (((uint16)endH * 60 + endM) > ((uint16)startH * 60 + startM))
+            return ((uint16)curH * 60 + curM) >= ((uint16)endH * 60 + endM);
+        if (((uint16)endH * 60 + endM) < ((uint16)startH * 60 + startM))
+            return ((uint16)curH * 60 + curM) >= ((uint16)endH * 60 + endM) && ((uint16)curH * 60 + curM) < ((uint16)startH * 60 + startM);
+        return false;
     }
 
     static void setupBtcUsdtQuery(const id& oracleId, const DateAndTime& timestamp, OI::Price::OracleQuery& query)
@@ -1371,5 +1364,6 @@ struct QRACEL : public ContractBase
     }
 
     EXPAND()
+    {
     }
 };
