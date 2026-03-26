@@ -1275,8 +1275,4 @@ struct QRACEL : public ContractBase
     POST_INCOMING_TRANSFER()
     {
     }
-
-    EXPAND()
-    {
-    }
 };
