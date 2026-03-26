@@ -120,6 +120,10 @@ struct QRACEL : public ContractBase
         HashMap<uint64, uint32, QRACEL_MAX_ROUNDS> roundIdToIndex;
     };
 
+    StateData _stateData;
+    const StateData& get() const { return _stateData; }
+    StateData& mut() { return _stateData; }
+
     static bool isValidDuration(uint8 durationType)
     {
         return (durationType >= QRACEL_DURATION_10M && durationType <= QRACEL_DURATION_24H) || durationType == QRACEL_DURATION_1M;
