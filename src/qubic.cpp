@@ -6073,6 +6073,13 @@ static bool initialize()
     initializeContractErrors();
     initializeContracts();
 
+#if START_NETWORK_FROM_SCRATCH
+    // On fresh network, QRACEL has no IPO shares and no fee reserve.
+    // Clear any error and set fee reserve so procedures (Fund, etc.) work.
+    contractError[QRACEL_CONTRACT_INDEX] = NoContractError;
+    setContractFeeReserve(QRACEL_CONTRACT_INDEX, 100000000000LL);
+#endif
+
     if (loadMiningSeedFromFile)
     {
         score->initMiningData(initialRandomSeedFromPersistingState);
