@@ -252,17 +252,7 @@
 #undef CONTRACT_STATE_TYPE
 #undef CONTRACT_STATE2_TYPE
 
-#define PULSE_CONTRACT_INDEX 24
-#define CONTRACT_INDEX PULSE_CONTRACT_INDEX
-#define CONTRACT_STATE_TYPE PULSE
-#define CONTRACT_STATE2_TYPE PULSE2
-#include "contracts/Pulse.h"
-
-#undef CONTRACT_INDEX
-#undef CONTRACT_STATE_TYPE
-#undef CONTRACT_STATE2_TYPE
-
-#define QRACEL_CONTRACT_INDEX 25
+#define QRACEL_CONTRACT_INDEX 24
 #define CONTRACT_INDEX QRACEL_CONTRACT_INDEX
 #define CONTRACT_STATE_TYPE QRACEL
 #define CONTRACT_STATE2_TYPE QRACEL2
@@ -381,7 +371,6 @@ constexpr struct ContractDescription
 	{"QRP", 9999, 10000, sizeof(IPO)}, // disabled: no state file in snapshot
 	{"QTF", 9999, 10000, sizeof(QTF::StateData)}, // disabled: no state file in snapshot
     {"QDUEL", 9999, 10000, sizeof(QDUEL::StateData)}, // disabled: no state file in snapshot
-	{"PULSE", 9999, 10000, sizeof(PULSE::StateData)}, // disabled: no state file in snapshot
     {"QRACEL", 204, 10000, sizeof(QRACEL::StateData)},
     // new contracts should be added above this line
 #ifdef INCLUDE_CONTRACT_TEST_EXAMPLES
@@ -502,7 +491,6 @@ static void initializeContracts()
     REGISTER_CONTRACT_FUNCTIONS_AND_PROCEDURES(QRP);
     REGISTER_CONTRACT_FUNCTIONS_AND_PROCEDURES(QTF);
     REGISTER_CONTRACT_FUNCTIONS_AND_PROCEDURES(QDUEL);
-	REGISTER_CONTRACT_FUNCTIONS_AND_PROCEDURES(PULSE);
 	REGISTER_CONTRACT_FUNCTIONS_AND_PROCEDURES(QRACEL);
     // new contracts should be added above this line
 #ifdef INCLUDE_CONTRACT_TEST_EXAMPLES
