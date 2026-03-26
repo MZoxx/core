@@ -268,6 +268,10 @@
 #define CONTRACT_STATE2_TYPE QRACEL2
 #include "contracts/qRacel.h"
 
+#undef CONTRACT_INDEX
+#undef CONTRACT_STATE_TYPE
+#undef CONTRACT_STATE2_TYPE
+
 // new contracts should be added above this line
 
 #ifdef INCLUDE_CONTRACT_TEST_EXAMPLES
