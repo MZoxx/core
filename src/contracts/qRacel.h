@@ -11,8 +11,10 @@ constexpr uint8 QRACEL_DURATION_6H = 3;
 constexpr uint8 QRACEL_DURATION_24H = 4;
 constexpr uint8 QRACEL_DURATION_1M = 5;
 constexpr uint8 QRACEL_DURATION_COUNT = 5;
+constexpr uint8 QRACEL_DURATION_CAPACITY = 8;
 constexpr uint8 QRACEL_MAX_PENDING_SLOTS = 10;
 constexpr uint32 QRACEL_TOTAL_PENDING_SLOTS = 50;
+constexpr uint32 QRACEL_PENDING_CAPACITY = 64;
 
 constexpr uint8 QRACEL_SIDE_NONE = 0;
 constexpr uint8 QRACEL_SIDE_UP = 1;
@@ -110,11 +112,11 @@ struct QRACEL : public ContractBase
         uint16 _dbgPad1;
         uint32 dbgActiveRaw;
         uint32 dbgEndTickAutoCreates;
-        Array<uint8, QRACEL_DURATION_COUNT> pendingCounts;
-        Array<uint32, QRACEL_TOTAL_PENDING_SLOTS> pendingRounds;
+        Array<uint8, QRACEL_DURATION_CAPACITY> pendingCounts;
+        Array<uint32, QRACEL_PENDING_CAPACITY> pendingRounds;
         Array<RoundData, QRACEL_MAX_ROUNDS> rounds;
         Array<BetData, QRACEL_MAX_BETS> bets;
-        Array<uint32, QRACEL_DURATION_COUNT> activeRoundByDuration;
+        Array<uint32, QRACEL_DURATION_CAPACITY> activeRoundByDuration;
         HashMap<uint64, uint32, QRACEL_MAX_ROUNDS> roundIdToIndex;
     };
 
