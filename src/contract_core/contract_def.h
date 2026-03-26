@@ -382,7 +382,7 @@ constexpr struct ContractDescription
 	{"QTF", 9999, 10000, sizeof(QTF::StateData)}, // disabled: no state file in snapshot
     {"QDUEL", 9999, 10000, sizeof(QDUEL::StateData)}, // disabled: no state file in snapshot
 	{"PULSE", 9999, 10000, sizeof(PULSE::StateData)}, // disabled: no state file in snapshot
-    {"QRACEL", 204, 10000, sizeof(QRACEL::StateData)}, // construction epoch 204 (current epoch)
+    {"QRACEL", 204, 10000, sizeof(QRACEL::StateData)},
     // new contracts should be added above this line
 #ifdef INCLUDE_CONTRACT_TEST_EXAMPLES
     {"TESTEXA", 138, 10000, sizeof(TESTEXA::StateData)},

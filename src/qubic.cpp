@@ -6159,11 +6159,6 @@ static bool initialize()
 
 
     initializeContractErrors();
-    // QRACEL never had an IPO on this testnet (START_NETWORK_FROM_SCRATCH),
-    // so initializeContractErrors() incorrectly marks it as IPO-failed.
-    // Clear the error to allow the contract to run.
-    contractError[QRACEL_CONTRACT_INDEX] = 0;
-    setContractFeeReserve(QRACEL_CONTRACT_INDEX, 100000000000);
     initializeContracts();
 
     if (loadMiningSeedFromFile)
