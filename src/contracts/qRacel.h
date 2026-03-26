@@ -9,12 +9,12 @@ constexpr uint8 QRACEL_DURATION_10M = 1;
 constexpr uint8 QRACEL_DURATION_60M = 2;
 constexpr uint8 QRACEL_DURATION_6H = 3;
 constexpr uint8 QRACEL_DURATION_24H = 4;
-constexpr uint8 QRACEL_DURATION_COUNT = 4;
-
-constexpr uint32 QRACEL_TICKS_10M = 600;
-constexpr uint32 QRACEL_TICKS_60M = 3600;
-constexpr uint32 QRACEL_TICKS_6H = 21600;
-constexpr uint32 QRACEL_TICKS_24H = 86400;
+constexpr uint8 QRACEL_DURATION_1M = 5;
+constexpr uint8 QRACEL_DURATION_COUNT = 5;
+constexpr uint8 QRACEL_DURATION_CAPACITY = 8;
+constexpr uint8 QRACEL_MAX_PENDING_SLOTS = 10;
+constexpr uint32 QRACEL_TOTAL_PENDING_SLOTS = 50;
+constexpr uint32 QRACEL_PENDING_CAPACITY = 64;
 
 constexpr uint8 QRACEL_SIDE_NONE = 0;
 constexpr uint8 QRACEL_SIDE_UP = 1;
@@ -25,12 +25,10 @@ constexpr uint8 QRACEL_ROUND_WAIT_START = 1;
 constexpr uint8 QRACEL_ROUND_OPEN = 2;
 constexpr uint8 QRACEL_ROUND_WAIT_END = 3;
 constexpr uint8 QRACEL_ROUND_RESOLVED = 4;
-
-constexpr uint8 QRACEL_QUERY_PHASE_START = 1;
-constexpr uint8 QRACEL_QUERY_PHASE_END = 2;
+constexpr uint8 QRACEL_ROUND_PENDING = 5;
 
 constexpr uint32 QRACEL_ORACLE_TIMEOUT_MS = 120000;
-constexpr uint32 QRACEL_ORACLE_RETRY_TICKS = 30;
+constexpr uint32 QRACEL_NO_ROUND = 0xFFFFFFFFU;
 
 constexpr uint8 QRACEL_STATUS_SUCCESS = 1;
 constexpr uint8 QRACEL_STATUS_NOT_AUTHORIZED = 2;
@@ -55,7 +53,6 @@ struct QRACEL : public ContractBase
     struct RoundData
     {
         uint64 roundId;
-        uint32 durationTicks;
         uint32 startTick;
         uint32 endTick;
         uint32 resolvedTick;
@@ -73,6 +70,10 @@ struct QRACEL : public ContractBase
         uint8 durationType;
         uint8 status;
         uint8 winningSide;
+        uint8 startHour;
+        uint8 startMinute;
+        uint8 endHour;
+        uint8 endMinute;
         uint8 _pad0;
     };
 
@@ -86,52 +87,95 @@ struct QRACEL : public ContractBase
         uint16 _pad0;
     };
 
-    struct OracleQueryContext
+    struct StateData
     {
-        uint32 roundIndex;
-        uint8 phase;
+        id admin;
+        id oracleId;
+        uint8 autoCreate;
+        uint8 lastQueryHour;
+        uint8 lastQueryMinute;
+        uint8 pendingPriceHour;
+        uint8 pendingPriceMinute;
         uint8 _pad0;
         uint16 _pad1;
+        uint32 roundCount;
+        uint32 betCount;
+        uint64 nextRoundId;
+        uint64 totalVolume;
+        uint64 totalPayouts;
+        sint64 pendingPriceQueryId;
+        sint64 dbgLastQueryId;
+        uint32 dbgCreateRoundCalls;
+        uint32 dbgOracleFails;
+        uint8 dbgLastStatus;
+        uint8 _dbgPad0;
+        uint16 _dbgPad1;
+        uint32 dbgActiveRaw;
+        uint32 dbgEndTickAutoCreates;
+        Array<uint8, QRACEL_DURATION_CAPACITY> pendingCounts;
+        Array<uint32, QRACEL_PENDING_CAPACITY> pendingRounds;
+        Array<RoundData, QRACEL_MAX_ROUNDS> rounds;
+        Array<BetData, QRACEL_MAX_BETS> bets;
+        Array<uint32, QRACEL_DURATION_CAPACITY> activeRoundByDuration;
+        HashMap<uint64, uint32, QRACEL_MAX_ROUNDS> roundIdToIndex;
     };
-
-    id admin;
-    id oracleId;
-    bit autoCreate;
-    uint8 _pad0;
-    uint16 _pad1;
-    uint32 _pad2;
-    uint32 roundCount;
-    uint32 betCount;
-    uint64 nextRoundId;
-    uint64 totalVolume;
-    uint64 totalPayouts;
-    Array<RoundData, QRACEL_MAX_ROUNDS> rounds;
-    Array<BetData, QRACEL_MAX_BETS> bets;
-    Array<uint32, QRACEL_DURATION_COUNT> activeRoundByDuration;
-    HashMap<uint64, uint32, QRACEL_MAX_ROUNDS> roundIdToIndex;
-    HashMap<uint64, OracleQueryContext, 1024> oracleQueryContext;
 
     static bool isValidDuration(uint8 durationType)
     {
-        return durationType >= QRACEL_DURATION_10M && durationType <= QRACEL_DURATION_24H;
-    }
-
-    static uint32 durationToTicks(uint8 durationType)
-    {
-        if (durationType == QRACEL_DURATION_10M)
-            return QRACEL_TICKS_10M;
-        if (durationType == QRACEL_DURATION_60M)
-            return QRACEL_TICKS_60M;
-        if (durationType == QRACEL_DURATION_6H)
-            return QRACEL_TICKS_6H;
-        if (durationType == QRACEL_DURATION_24H)
-            return QRACEL_TICKS_24H;
-        return 0;
+        return (durationType >= QRACEL_DURATION_10M && durationType <= QRACEL_DURATION_24H) || durationType == QRACEL_DURATION_1M;
     }
 
     static uint32 durationToIndex(uint8 durationType)
     {
         return durationType - 1;
+    }
+
+    static void computeRoundEndTime(uint8 durationType, uint8 startHour, uint8 startMinute, uint8& endHour, uint8& endMinute)
+    {
+        endHour = startHour;
+        endMinute = startMinute;
+
+        if (durationType == QRACEL_DURATION_1M)
+        {
+            endMinute = startMinute + 1;
+            if (endMinute >= 60) { endMinute -= 60; endHour += 1; }
+        }
+        else if (durationType == QRACEL_DURATION_10M)
+        {
+            endMinute = startMinute + 10;
+            if (endMinute >= 60) { endMinute -= 60; endHour += 1; }
+        }
+        else if (durationType == QRACEL_DURATION_60M)
+        {
+            endHour = startHour + 1;
+            endMinute = 0;
+        }
+        else if (durationType == QRACEL_DURATION_6H)
+        {
+            endHour = startHour + 6;
+            endMinute = 0;
+        }
+        else // 24H
+        {
+            endMinute = 0;
+            endHour = startHour + 24;
+        }
+
+        if (endHour >= 24) endHour -= 24;
+    }
+
+    static bool hasTimeArrived(uint8 curH, uint8 curM, uint8 targetH, uint8 targetM)
+    {
+        return ((uint16)curH * 60 + curM) >= ((uint16)targetH * 60 + targetM);
+    }
+
+    static bool isRoundTimeExpired(uint8 curH, uint8 curM, uint8 endH, uint8 endM, uint8 startH, uint8 startM)
+    {
+        if (((uint16)endH * 60 + endM) > ((uint16)startH * 60 + startM))
+            return ((uint16)curH * 60 + curM) >= ((uint16)endH * 60 + endM);
+        if (((uint16)endH * 60 + endM) < ((uint16)startH * 60 + startM))
+            return ((uint16)curH * 60 + curM) >= ((uint16)endH * 60 + endM) && ((uint16)curH * 60 + curM) < ((uint16)startH * 60 + startM);
+        return false;
     }
 
     static void setupBtcUsdtQuery(const id& oracleId, const DateAndTime& timestamp, OI::Price::OracleQuery& query)
@@ -141,6 +185,45 @@ struct QRACEL : public ContractBase
         query.timestamp = timestamp;
         query.currency1 = id(B, T, C, null, null);
         query.currency2 = id(U, S, D, T, null);
+    }
+
+    static void computeNextBoundary(uint8 durationType, uint8 curH, uint8 curM, uint8& nextH, uint8& nextM)
+    {
+        nextH = curH;
+        nextM = 0;
+        if (durationType == QRACEL_DURATION_1M)
+        {
+            nextM = curM + 1;
+            if (nextM >= 60) { nextM = 0; nextH = curH + 1; }
+        }
+        else if (durationType == QRACEL_DURATION_10M)
+        {
+            nextM = (div((uint32)curM, (uint32)10) + 1) * 10;
+            if (nextM >= 60) { nextM = nextM - 60; nextH = curH + 1; }
+        }
+        else if (durationType == QRACEL_DURATION_60M)
+        {
+            nextH = curH + 1;
+        }
+        else if (durationType == QRACEL_DURATION_6H)
+        {
+            nextH = (div((uint32)curH, (uint32)6) + 1) * 6;
+        }
+        else
+        {
+            nextH = 0;
+        }
+        if (nextH >= 24) nextH = nextH - 24;
+    }
+
+    static bool isBoundaryForDuration(uint8 durationType, uint8 hour, uint8 minute)
+    {
+        if (durationType == QRACEL_DURATION_1M) return true;
+        if (durationType == QRACEL_DURATION_10M) return mod((uint32)minute, (uint32)10) == 0;
+        if (durationType == QRACEL_DURATION_60M) return minute == 0;
+        if (durationType == QRACEL_DURATION_6H) return minute == 0 && mod((uint32)hour, (uint32)6) == 0;
+        if (durationType == QRACEL_DURATION_24H) return minute == 0 && hour == 0;
+        return false;
     }
 
     struct SetAdmin_input
@@ -154,7 +237,7 @@ struct QRACEL : public ContractBase
 
     struct SetAutoCreate_input
     {
-        bit autoCreate;
+        uint8 autoCreate;
         uint8 _pad0;
         uint16 _pad1;
         uint32 _pad2;
@@ -173,20 +256,31 @@ struct QRACEL : public ContractBase
         uint8 status;
     };
 
+    struct Fund_input
+    {
+    };
+    struct Fund_output
+    {
+        uint8 status;
+    };
+
     struct CreateRound_input
     {
         uint8 durationType;
+        uint8 startHour;
+        uint8 startMinute;
         uint8 _pad0;
-        uint16 _pad1;
-        uint32 _pad2;
+        uint32 _pad1;
     };
     struct CreateRound_output
     {
         uint8 status;
+        uint8 startHour;
+        uint8 startMinute;
+        uint8 endHour;
+        uint8 endMinute;
         uint8 _pad0;
         uint16 _pad1;
-        uint32 startTick;
-        uint32 endTick;
         uint64 roundId;
         sint64 startQueryId;
     };
@@ -194,11 +288,7 @@ struct QRACEL : public ContractBase
     {
         uint32 durationIndex;
         uint32 roundIndex;
-        uint32 durationTicks;
         RoundData round;
-        OI::Price::OracleQuery query;
-        sint64 queryId;
-        OracleQueryContext queryContext;
     };
 
     struct PlaceBet_input
@@ -262,6 +352,10 @@ struct QRACEL : public ContractBase
         uint8 durationType;
         uint8 status;
         uint8 winningSide;
+        uint8 startHour;
+        uint8 startMinute;
+        uint8 endHour;
+        uint8 endMinute;
         uint32 startTick;
         uint32 endTick;
         uint32 resolvedTick;
@@ -313,7 +407,7 @@ struct QRACEL : public ContractBase
     {
         id admin;
         id oracleId;
-        bit autoCreate;
+        uint8 autoCreate;
         uint8 _pad0;
         uint16 _pad1;
         uint32 _pad2;
@@ -323,10 +417,24 @@ struct QRACEL : public ContractBase
         uint64 nextRoundId;
         uint64 totalVolume;
         uint64 totalPayouts;
+        uint64 activeRound1m;
         uint64 activeRound10m;
         uint64 activeRound60m;
         uint64 activeRound6h;
         uint64 activeRound24h;
+        uint64 pendingRound1m;
+        uint64 pendingRound10m;
+        uint64 pendingRound60m;
+        uint64 pendingRound6h;
+        uint64 pendingRound24h;
+        sint64 dbgLastQueryId;
+        uint32 dbgCreateRoundCalls;
+        uint32 dbgOracleFails;
+        uint8 dbgLastStatus;
+        uint8 _dbgPad0;
+        uint16 _dbgPad1;
+        uint32 dbgActiveRaw;
+        uint32 dbgEndTickAutoCreates;
     };
     struct GetConfig_locals
     {
@@ -345,6 +453,10 @@ struct QRACEL : public ContractBase
         uint8 found;
         uint8 durationType;
         uint8 status;
+        uint8 startHour;
+        uint8 startMinute;
+        uint8 endHour;
+        uint8 endMinute;
         uint8 _pad0;
         uint32 startTick;
         uint32 endTick;
@@ -361,24 +473,46 @@ struct QRACEL : public ContractBase
     typedef NoData NotifyPriceOracleReply_output;
     struct NotifyPriceOracleReply_locals
     {
-        OracleQueryContext queryContext;
-        RoundData round;
+        uint8 qH;
+        uint8 qM;
+        uint8 d;
+        uint8 durationType;
         uint32 durationIndex;
+        uint32 activeIdx;
+        uint32 pendingIdx;
+        uint32 s;
+        uint32 slotBase;
+        RoundData round;
         uint64 lhs;
         uint64 rhs;
+        uint32 betIdx;
+        BetData curBet;
+        uint64 winnerPool;
+        uint64 loserPool;
+        uint64 bonus;
+        uint64 payout;
+        sint64 transferResult;
+    };
+
+    struct INITIALIZE_locals
+    {
+        uint32 i;
     };
 
     struct END_TICK_locals
     {
-        uint8 i;
+        uint8 d;
         uint8 durationType;
+        uint8 nextH;
+        uint8 nextM;
         uint32 durationIndex;
         uint32 roundIndex;
-        uint32 durationTicks;
+        uint32 maxPending;
+        uint32 slotBase;
+        uint32 p;
         RoundData round;
         OI::Price::OracleQuery query;
         sint64 queryId;
-        OracleQueryContext queryContext;
     };
 
     REGISTER_USER_FUNCTIONS_AND_PROCEDURES()
@@ -389,6 +523,7 @@ struct QRACEL : public ContractBase
         REGISTER_USER_PROCEDURE(ClaimWinnings, 4);
         REGISTER_USER_PROCEDURE(SetAutoCreate, 5);
         REGISTER_USER_PROCEDURE(SetOracle, 6);
+        REGISTER_USER_PROCEDURE(Fund, 7);
 
         REGISTER_USER_FUNCTION(GetRound, 1);
         REGISTER_USER_FUNCTION(GetBet, 2);
@@ -407,9 +542,9 @@ struct QRACEL : public ContractBase
             return;
         }
 
-        if (state.admin == NULL_ID || qpi.invocator() == state.admin)
+        if (state.get().admin == NULL_ID || qpi.invocator() == state.get().admin)
         {
-            state.admin = input.newAdmin;
+            state.mut().admin = input.newAdmin;
             output.status = QRACEL_STATUS_SUCCESS;
         }
     }
@@ -417,17 +552,17 @@ struct QRACEL : public ContractBase
     PUBLIC_PROCEDURE(SetAutoCreate)
     {
         output.status = QRACEL_STATUS_NOT_AUTHORIZED;
-        if (qpi.invocator() != state.admin)
+        if (qpi.invocator() != state.get().admin)
             return;
 
-        state.autoCreate = input.autoCreate;
+        state.mut().autoCreate = input.autoCreate;
         output.status = QRACEL_STATUS_SUCCESS;
     }
 
     PUBLIC_PROCEDURE(SetOracle)
     {
         output.status = QRACEL_STATUS_NOT_AUTHORIZED;
-        if (qpi.invocator() != state.admin)
+        if (qpi.invocator() != state.get().admin)
             return;
 
         if (input.oracleId == NULL_ID)
@@ -436,96 +571,25 @@ struct QRACEL : public ContractBase
             return;
         }
 
-        state.oracleId = input.oracleId;
+        state.mut().oracleId = input.oracleId;
+        output.status = QRACEL_STATUS_SUCCESS;
+    }
+
+    PUBLIC_PROCEDURE(Fund)
+    {
         output.status = QRACEL_STATUS_SUCCESS;
     }
 
     PUBLIC_PROCEDURE_WITH_LOCALS(CreateRound)
     {
+        // Rounds are created automatically by the contract
         output.status = QRACEL_STATUS_NOT_AUTHORIZED;
         output.roundId = 0;
-        output.startTick = 0;
-        output.endTick = 0;
-        output.startQueryId = -1;
-
-        if (qpi.invocator() != state.admin)
-            return;
-
-        if (!isValidDuration(input.durationType))
-        {
-            output.status = QRACEL_STATUS_INVALID_INPUT;
-            return;
-        }
-
-        locals.durationIndex = durationToIndex(input.durationType);
-        if (state.activeRoundByDuration.get(locals.durationIndex) != NULL_INDEX)
-        {
-            output.status = QRACEL_STATUS_ALREADY_ACTIVE;
-            return;
-        }
-
-        if (state.roundCount >= QRACEL_MAX_ROUNDS)
-        {
-            output.status = QRACEL_STATUS_LIMIT_REACHED;
-            return;
-        }
-
-        locals.durationTicks = durationToTicks(input.durationType);
-        if (locals.durationTicks == 0)
-        {
-            output.status = QRACEL_STATUS_INVALID_INPUT;
-            return;
-        }
-
-        locals.roundIndex = state.roundCount;
-        locals.round.roundId = state.nextRoundId + 1;
-        locals.round.durationTicks = locals.durationTicks;
-        locals.round.startTick = qpi.tick();
-        locals.round.endTick = qpi.tick() + locals.durationTicks;
-        locals.round.resolvedTick = 0;
-        locals.round.betCount = 0;
-        locals.round.upPool = 0;
-        locals.round.downPool = 0;
-        locals.round.totalPool = 0;
-        locals.round.startNumerator = 0;
-        locals.round.startDenominator = 0;
-        locals.round.endNumerator = 0;
-        locals.round.endDenominator = 0;
-        locals.round.startQueryId = 0;
-        locals.round.endQueryId = 0;
-        locals.round.nextOracleRetryTick = 0;
-        locals.round.durationType = input.durationType;
-        locals.round.status = QRACEL_ROUND_WAIT_START;
-        locals.round.winningSide = QRACEL_SIDE_NONE;
-        locals.round._pad0 = 0;
-
-        setupBtcUsdtQuery(state.oracleId, qpi.now(), locals.query);
-        locals.queryId = QUERY_ORACLE(OI::Price, locals.query, NotifyPriceOracleReply, QRACEL_ORACLE_TIMEOUT_MS);
-        if (locals.queryId < 0)
-        {
-            output.status = QRACEL_STATUS_ORACLE_FAILED;
-            return;
-        }
-
-        locals.round.startQueryId = locals.queryId;
-        state.rounds.set(locals.roundIndex, locals.round);
-        state.roundIdToIndex.set(locals.round.roundId, locals.roundIndex);
-
-        locals.queryContext.roundIndex = locals.roundIndex;
-        locals.queryContext.phase = QRACEL_QUERY_PHASE_START;
-        locals.queryContext._pad0 = 0;
-        locals.queryContext._pad1 = 0;
-        state.oracleQueryContext.set((uint64)locals.queryId, locals.queryContext);
-
-        state.activeRoundByDuration.set(locals.durationIndex, locals.roundIndex);
-        state.roundCount = state.roundCount + 1;
-        state.nextRoundId = locals.round.roundId;
-
-        output.roundId = locals.round.roundId;
-        output.startTick = locals.round.startTick;
-        output.endTick = locals.round.endTick;
-        output.startQueryId = locals.queryId;
-        output.status = QRACEL_STATUS_SUCCESS;
+        output.startHour = 0;
+        output.startMinute = 0;
+        output.endHour = 0;
+        output.endMinute = 0;
+        output.startQueryId = 0;
     }
 
     PUBLIC_PROCEDURE_WITH_LOCALS(PlaceBet)
@@ -554,29 +618,30 @@ struct QRACEL : public ContractBase
             return;
         }
 
-        if (state.betCount >= QRACEL_MAX_BETS)
+        if (state.get().betCount >= QRACEL_MAX_BETS)
         {
             qpi.transfer(qpi.invocator(), locals.reward);
             output.status = QRACEL_STATUS_LIMIT_REACHED;
             return;
         }
 
-        if (!state.roundIdToIndex.get(input.roundId, locals.roundIndex))
+        if (!state.get().roundIdToIndex.get(input.roundId, locals.roundIndex))
         {
             qpi.transfer(qpi.invocator(), locals.reward);
             output.status = QRACEL_STATUS_NOT_FOUND;
             return;
         }
 
-        if (locals.roundIndex >= state.roundCount)
+        if (locals.roundIndex >= state.get().roundCount)
         {
             qpi.transfer(qpi.invocator(), locals.reward);
             output.status = QRACEL_STATUS_NOT_FOUND;
             return;
         }
 
-        locals.round = state.rounds.get(locals.roundIndex);
-        if (locals.round.status != QRACEL_ROUND_OPEN || qpi.tick() >= locals.round.endTick)
+        locals.round = state.get().rounds.get(locals.roundIndex);
+        if ((locals.round.status != QRACEL_ROUND_OPEN && locals.round.status != QRACEL_ROUND_PENDING)
+            || isRoundTimeExpired(qpi.hour(), qpi.minute(), locals.round.endHour, locals.round.endMinute, locals.round.startHour, locals.round.startMinute))
         {
             qpi.transfer(qpi.invocator(), locals.reward);
             output.status = QRACEL_STATUS_ROUND_NOT_OPEN;
@@ -591,9 +656,9 @@ struct QRACEL : public ContractBase
         locals.bet.claimed = 0;
         locals.bet._pad0 = 0;
 
-        state.bets.set(state.betCount, locals.bet);
-        output.betId = state.betCount;
-        state.betCount = state.betCount + 1;
+        state.mut().bets.set(state.get().betCount, locals.bet);
+        output.betId = state.get().betCount;
+        state.mut().betCount = state.get().betCount + 1;
 
         if (input.side == QRACEL_SIDE_UP)
         {
@@ -606,8 +671,8 @@ struct QRACEL : public ContractBase
         locals.round.totalPool = sadd(locals.round.totalPool, locals.amount);
         locals.round.betCount = locals.round.betCount + 1;
 
-        state.rounds.set(locals.roundIndex, locals.round);
-        state.totalVolume = sadd(state.totalVolume, locals.amount);
+        state.mut().rounds.set(locals.roundIndex, locals.round);
+        state.mut().totalVolume = sadd(state.get().totalVolume, locals.amount);
 
         output.acceptedAmount = locals.amount;
         output.roundPoolUp = locals.round.upPool;
@@ -622,13 +687,13 @@ struct QRACEL : public ContractBase
         output.roundId = 0;
         output.payoutAmount = 0;
 
-        if (input.betId >= state.betCount)
+        if (input.betId >= state.get().betCount)
         {
             output.status = QRACEL_STATUS_NOT_FOUND;
             return;
         }
 
-        locals.bet = state.bets.get(input.betId);
+        locals.bet = state.get().bets.get(input.betId);
         if (locals.bet.bettor != qpi.invocator())
         {
             output.status = QRACEL_STATUS_NOT_AUTHORIZED;
@@ -641,13 +706,13 @@ struct QRACEL : public ContractBase
             return;
         }
 
-        if (locals.bet.roundIndex >= state.roundCount)
+        if (locals.bet.roundIndex >= state.get().roundCount)
         {
             output.status = QRACEL_STATUS_NOT_FOUND;
             return;
         }
 
-        locals.round = state.rounds.get(locals.bet.roundIndex);
+        locals.round = state.get().rounds.get(locals.bet.roundIndex);
         output.roundId = locals.round.roundId;
         output.winningSide = locals.round.winningSide;
 
@@ -664,7 +729,7 @@ struct QRACEL : public ContractBase
         else if (locals.bet.side != locals.round.winningSide)
         {
             locals.bet.claimed = 1;
-            state.bets.set(input.betId, locals.bet);
+            state.mut().bets.set(input.betId, locals.bet);
             output.status = QRACEL_STATUS_NOT_WINNER;
             return;
         }
@@ -697,8 +762,8 @@ struct QRACEL : public ContractBase
         }
 
         locals.bet.claimed = 1;
-        state.bets.set(input.betId, locals.bet);
-        state.totalPayouts = sadd(state.totalPayouts, locals.payout);
+        state.mut().bets.set(input.betId, locals.bet);
+        state.mut().totalPayouts = sadd(state.get().totalPayouts, locals.payout);
 
         output.payoutAmount = locals.payout;
         output.status = QRACEL_STATUS_SUCCESS;
@@ -706,87 +771,143 @@ struct QRACEL : public ContractBase
 
     PRIVATE_PROCEDURE_WITH_LOCALS(NotifyPriceOracleReply)
     {
-        if (!state.oracleQueryContext.get((uint64)input.queryId, locals.queryContext))
+        // Only accept replies for our pending shared query
+        if (input.queryId != state.get().pendingPriceQueryId)
             return;
 
-        state.oracleQueryContext.removeByKey((uint64)input.queryId);
+        state.mut().pendingPriceQueryId = 0;
 
-        if (locals.queryContext.roundIndex >= state.roundCount)
-            return;
-
-        locals.round = state.rounds.get(locals.queryContext.roundIndex);
-
-        if (locals.queryContext.phase == QRACEL_QUERY_PHASE_START)
+        if (input.status != ORACLE_QUERY_STATUS_SUCCESS || !OI::Price::replyIsValid(input.reply))
         {
-            if (locals.round.startQueryId != input.queryId)
-                return;
-
-            locals.round.startQueryId = 0;
-            if (input.status == ORACLE_QUERY_STATUS_SUCCESS && OI::Price::replyIsValid(input.reply))
-            {
-                locals.round.startNumerator = input.reply.numerator;
-                locals.round.startDenominator = input.reply.denominator;
-                locals.round.status = QRACEL_ROUND_OPEN;
-                locals.round.nextOracleRetryTick = 0;
-            }
-            else
-            {
-                locals.round.status = QRACEL_ROUND_WAIT_START;
-                locals.round.nextOracleRetryTick = qpi.tick() + QRACEL_ORACLE_RETRY_TICKS;
-            }
-
-            state.rounds.set(locals.queryContext.roundIndex, locals.round);
+            state.mut().dbgOracleFails = state.get().dbgOracleFails + 1;
             return;
         }
 
-        if (locals.queryContext.phase == QRACEL_QUERY_PHASE_END)
+        locals.qH = state.get().pendingPriceHour;
+        locals.qM = state.get().pendingPriceMinute;
+        state.mut().lastQueryHour = locals.qH;
+        state.mut().lastQueryMinute = locals.qM;
+
+        // For each duration: resolve active, then activate next pending
+        for (locals.d = 0; locals.d < QRACEL_DURATION_COUNT; ++locals.d)
         {
-            if (locals.round.endQueryId != input.queryId)
-                return;
+            locals.durationType = locals.d + 1;
+            locals.durationIndex = locals.d;
 
-            locals.round.endQueryId = 0;
-            if (input.status == ORACLE_QUERY_STATUS_SUCCESS && OI::Price::replyIsValid(input.reply))
+            if (!isBoundaryForDuration(locals.durationType, locals.qH, locals.qM))
+                continue;
+
+            // A) Resolve active round (set end price)
+            locals.activeIdx = state.get().activeRoundByDuration.get(locals.durationIndex);
+            if (locals.activeIdx != QRACEL_NO_ROUND && locals.activeIdx < state.get().roundCount)
             {
-                locals.round.endNumerator = input.reply.numerator;
-                locals.round.endDenominator = input.reply.denominator;
+                locals.round = state.get().rounds.get(locals.activeIdx);
+                if (locals.round.status == QRACEL_ROUND_OPEN)
+                {
+                    locals.round.endNumerator = input.reply.numerator;
+                    locals.round.endDenominator = input.reply.denominator;
+                    locals.round.endTick = qpi.tick();
+                    locals.round.endQueryId = input.queryId;
 
-                locals.lhs = smul((uint64)locals.round.endNumerator, (uint64)locals.round.startDenominator);
-                locals.rhs = smul((uint64)locals.round.startNumerator, (uint64)locals.round.endDenominator);
-                if (locals.lhs > locals.rhs)
-                {
-                    locals.round.winningSide = QRACEL_SIDE_UP;
-                }
-                else if (locals.lhs < locals.rhs)
-                {
-                    locals.round.winningSide = QRACEL_SIDE_DOWN;
-                }
-                else
-                {
-                    locals.round.winningSide = QRACEL_SIDE_DRAW;
-                }
+                    locals.lhs = smul((uint64)locals.round.endNumerator, (uint64)locals.round.startDenominator);
+                    locals.rhs = smul((uint64)locals.round.startNumerator, (uint64)locals.round.endDenominator);
+                    if (locals.lhs > locals.rhs)
+                        locals.round.winningSide = QRACEL_SIDE_UP;
+                    else if (locals.lhs < locals.rhs)
+                        locals.round.winningSide = QRACEL_SIDE_DOWN;
+                    else
+                        locals.round.winningSide = QRACEL_SIDE_DRAW;
 
-                if (locals.round.upPool == 0 || locals.round.downPool == 0)
-                {
-                    locals.round.winningSide = QRACEL_SIDE_DRAW;
-                }
+                    if (locals.round.upPool == 0 || locals.round.downPool == 0)
+                        locals.round.winningSide = QRACEL_SIDE_DRAW;
 
-                locals.round.status = QRACEL_ROUND_RESOLVED;
-                locals.round.resolvedTick = qpi.tick();
-                locals.round.nextOracleRetryTick = 0;
+                    locals.round.status = QRACEL_ROUND_RESOLVED;
+                    locals.round.resolvedTick = qpi.tick();
+                    state.mut().rounds.set(locals.activeIdx, locals.round);
+                    state.mut().activeRoundByDuration.set(locals.durationIndex, QRACEL_NO_ROUND);
 
-                locals.durationIndex = durationToIndex(locals.round.durationType);
-                if (locals.durationIndex < QRACEL_DURATION_COUNT && state.activeRoundByDuration.get(locals.durationIndex) == locals.queryContext.roundIndex)
-                {
-                    state.activeRoundByDuration.set(locals.durationIndex, NULL_INDEX);
+                    // Auto-payout
+                    for (locals.betIdx = 0; locals.betIdx < state.get().betCount; locals.betIdx = locals.betIdx + 1)
+                    {
+                        locals.curBet = state.get().bets.get(locals.betIdx);
+                        if (locals.curBet.roundIndex != locals.activeIdx)
+                            continue;
+                        if (locals.curBet.claimed)
+                            continue;
+
+                        if (locals.round.winningSide == QRACEL_SIDE_DRAW)
+                        {
+                            locals.payout = locals.curBet.amount;
+                        }
+                        else if (locals.curBet.side != locals.round.winningSide)
+                        {
+                            locals.curBet.claimed = 1;
+                            state.mut().bets.set(locals.betIdx, locals.curBet);
+                            continue;
+                        }
+                        else
+                        {
+                            locals.winnerPool = (locals.round.winningSide == QRACEL_SIDE_UP) ? locals.round.upPool : locals.round.downPool;
+                            if (locals.winnerPool == 0)
+                            {
+                                locals.payout = locals.curBet.amount;
+                            }
+                            else
+                            {
+                                locals.loserPool = locals.round.totalPool - locals.winnerPool;
+                                locals.bonus = div<uint64>(smul(locals.curBet.amount, locals.loserPool), locals.winnerPool);
+                                locals.payout = sadd(locals.curBet.amount, locals.bonus);
+                            }
+                        }
+
+                        if (locals.payout > 0 && locals.payout <= QRACEL_MAX_TRANSFERABLE)
+                        {
+                            locals.transferResult = qpi.transfer(locals.curBet.bettor, (sint64)locals.payout);
+                            if (locals.transferResult >= 0)
+                            {
+                                locals.curBet.claimed = 1;
+                                state.mut().bets.set(locals.betIdx, locals.curBet);
+                                state.mut().totalPayouts = sadd(state.get().totalPayouts, locals.payout);
+                            }
+                        }
+                    }
                 }
             }
-            else
-            {
-                locals.round.status = QRACEL_ROUND_WAIT_END;
-                locals.round.nextOracleRetryTick = qpi.tick() + QRACEL_ORACLE_RETRY_TICKS;
-            }
 
-            state.rounds.set(locals.queryContext.roundIndex, locals.round);
+            // B) Activate first pending round (set start price)
+            if (state.get().activeRoundByDuration.get(locals.durationIndex) == QRACEL_NO_ROUND)
+            {
+                locals.slotBase = locals.durationIndex * QRACEL_MAX_PENDING_SLOTS;
+                if (state.get().pendingCounts.get(locals.durationIndex) > 0)
+                {
+                    locals.pendingIdx = state.get().pendingRounds.get(locals.slotBase);
+                    locals.round = state.get().rounds.get(locals.pendingIdx);
+
+                    if (hasTimeArrived(locals.qH, locals.qM, locals.round.startHour, locals.round.startMinute))
+                    {
+                        locals.round.startNumerator = input.reply.numerator;
+                        locals.round.startDenominator = input.reply.denominator;
+                        locals.round.startTick = qpi.tick();
+                        locals.round.startQueryId = input.queryId;
+                        locals.round.status = QRACEL_ROUND_OPEN;
+                        state.mut().rounds.set(locals.pendingIdx, locals.round);
+                        state.mut().activeRoundByDuration.set(locals.durationIndex, locals.pendingIdx);
+
+                        // Shift pending slots down
+                        for (locals.s = 1; locals.s < (uint32)state.get().pendingCounts.get(locals.durationIndex); locals.s = locals.s + 1)
+                        {
+                            state.mut().pendingRounds.set(
+                                locals.slotBase + locals.s - 1,
+                                state.get().pendingRounds.get(locals.slotBase + locals.s));
+                        }
+                        state.mut().pendingRounds.set(
+                            locals.slotBase + (uint32)state.get().pendingCounts.get(locals.durationIndex) - 1,
+                            QRACEL_NO_ROUND);
+                        state.mut().pendingCounts.set(locals.durationIndex,
+                            state.get().pendingCounts.get(locals.durationIndex) - 1);
+                    }
+                }
+            }
         }
     }
 
@@ -796,6 +917,10 @@ struct QRACEL : public ContractBase
         output.durationType = 0;
         output.status = 0;
         output.winningSide = QRACEL_SIDE_NONE;
+        output.startHour = 0;
+        output.startMinute = 0;
+        output.endHour = 0;
+        output.endMinute = 0;
         output.startTick = 0;
         output.endTick = 0;
         output.resolvedTick = 0;
@@ -810,17 +935,21 @@ struct QRACEL : public ContractBase
         output.startQueryId = 0;
         output.endQueryId = 0;
 
-        if (!state.roundIdToIndex.get(input.roundId, locals.roundIndex))
+        if (!state.get().roundIdToIndex.get(input.roundId, locals.roundIndex))
             return;
 
-        if (locals.roundIndex >= state.roundCount)
+        if (locals.roundIndex >= state.get().roundCount)
             return;
 
-        locals.round = state.rounds.get(locals.roundIndex);
+        locals.round = state.get().rounds.get(locals.roundIndex);
         output.found = 1;
         output.durationType = locals.round.durationType;
         output.status = locals.round.status;
         output.winningSide = locals.round.winningSide;
+        output.startHour = locals.round.startHour;
+        output.startMinute = locals.round.startMinute;
+        output.endHour = locals.round.endHour;
+        output.endMinute = locals.round.endMinute;
         output.startTick = locals.round.startTick;
         output.endTick = locals.round.endTick;
         output.resolvedTick = locals.round.resolvedTick;
@@ -848,14 +977,14 @@ struct QRACEL : public ContractBase
         output.roundId = 0;
         output.bettor = NULL_ID;
 
-        if (input.betId >= state.betCount)
+        if (input.betId >= state.get().betCount)
             return;
 
-        locals.bet = state.bets.get(input.betId);
-        if (locals.bet.roundIndex >= state.roundCount)
+        locals.bet = state.get().bets.get(input.betId);
+        if (locals.bet.roundIndex >= state.get().roundCount)
             return;
 
-        locals.round = state.rounds.get(locals.bet.roundIndex);
+        locals.round = state.get().rounds.get(locals.bet.roundIndex);
 
         output.found = 1;
         output.side = locals.bet.side;
@@ -870,39 +999,89 @@ struct QRACEL : public ContractBase
 
     PUBLIC_FUNCTION_WITH_LOCALS(GetConfig)
     {
-        output.admin = state.admin;
-        output.oracleId = state.oracleId;
-        output.autoCreate = state.autoCreate;
+        output.admin = state.get().admin;
+        output.oracleId = state.get().oracleId;
+        output.autoCreate = state.get().autoCreate;
         output._pad0 = 0;
         output._pad1 = 0;
         output._pad2 = 0;
         output.minBet = QRACEL_MIN_BET;
-        output.roundCount = state.roundCount;
-        output.betCount = state.betCount;
-        output.nextRoundId = state.nextRoundId;
-        output.totalVolume = state.totalVolume;
-        output.totalPayouts = state.totalPayouts;
+        output.roundCount = state.get().roundCount;
+        output.betCount = state.get().betCount;
+        output.nextRoundId = state.get().nextRoundId;
+        output.totalVolume = state.get().totalVolume;
+        output.totalPayouts = state.get().totalPayouts;
 
+        output.activeRound1m = 0;
         output.activeRound10m = 0;
         output.activeRound60m = 0;
         output.activeRound6h = 0;
         output.activeRound24h = 0;
+        output.pendingRound1m = 0;
+        output.pendingRound10m = 0;
+        output.pendingRound60m = 0;
+        output.pendingRound6h = 0;
+        output.pendingRound24h = 0;
+        output.dbgLastQueryId = state.get().dbgLastQueryId;
+        output.dbgCreateRoundCalls = state.get().dbgCreateRoundCalls;
+        output.dbgOracleFails = state.get().dbgOracleFails;
+        output.dbgLastStatus = state.get().dbgLastStatus;
+        output._dbgPad0 = 0;
+        output._dbgPad1 = 0;
+        output.dbgActiveRaw = state.get().dbgActiveRaw;
+        output.dbgEndTickAutoCreates = state.get().dbgEndTickAutoCreates;
 
-        locals.idx = state.activeRoundByDuration.get(durationToIndex(QRACEL_DURATION_10M));
-        if (locals.idx != NULL_INDEX && locals.idx < state.roundCount)
-            output.activeRound10m = state.rounds.get(locals.idx).roundId;
+        locals.idx = state.get().activeRoundByDuration.get(durationToIndex(QRACEL_DURATION_10M));
+        if (locals.idx != QRACEL_NO_ROUND && locals.idx < state.get().roundCount)
+            output.activeRound10m = state.get().rounds.get(locals.idx).roundId;
 
-        locals.idx = state.activeRoundByDuration.get(durationToIndex(QRACEL_DURATION_60M));
-        if (locals.idx != NULL_INDEX && locals.idx < state.roundCount)
-            output.activeRound60m = state.rounds.get(locals.idx).roundId;
+        locals.idx = state.get().activeRoundByDuration.get(durationToIndex(QRACEL_DURATION_60M));
+        if (locals.idx != QRACEL_NO_ROUND && locals.idx < state.get().roundCount)
+            output.activeRound60m = state.get().rounds.get(locals.idx).roundId;
 
-        locals.idx = state.activeRoundByDuration.get(durationToIndex(QRACEL_DURATION_6H));
-        if (locals.idx != NULL_INDEX && locals.idx < state.roundCount)
-            output.activeRound6h = state.rounds.get(locals.idx).roundId;
+        locals.idx = state.get().activeRoundByDuration.get(durationToIndex(QRACEL_DURATION_6H));
+        if (locals.idx != QRACEL_NO_ROUND && locals.idx < state.get().roundCount)
+            output.activeRound6h = state.get().rounds.get(locals.idx).roundId;
 
-        locals.idx = state.activeRoundByDuration.get(durationToIndex(QRACEL_DURATION_24H));
-        if (locals.idx != NULL_INDEX && locals.idx < state.roundCount)
-            output.activeRound24h = state.rounds.get(locals.idx).roundId;
+        locals.idx = state.get().activeRoundByDuration.get(durationToIndex(QRACEL_DURATION_24H));
+        if (locals.idx != QRACEL_NO_ROUND && locals.idx < state.get().roundCount)
+            output.activeRound24h = state.get().rounds.get(locals.idx).roundId;
+
+        locals.idx = state.get().activeRoundByDuration.get(durationToIndex(QRACEL_DURATION_1M));
+        if (locals.idx != QRACEL_NO_ROUND && locals.idx < state.get().roundCount)
+            output.activeRound1m = state.get().rounds.get(locals.idx).roundId;
+
+        // First pending for each duration (slot 0)
+        if (state.get().pendingCounts.get(durationToIndex(QRACEL_DURATION_10M)) > 0)
+        {
+            locals.idx = state.get().pendingRounds.get(durationToIndex(QRACEL_DURATION_10M) * QRACEL_MAX_PENDING_SLOTS);
+            if (locals.idx != QRACEL_NO_ROUND && locals.idx < state.get().roundCount)
+                output.pendingRound10m = state.get().rounds.get(locals.idx).roundId;
+        }
+        if (state.get().pendingCounts.get(durationToIndex(QRACEL_DURATION_60M)) > 0)
+        {
+            locals.idx = state.get().pendingRounds.get(durationToIndex(QRACEL_DURATION_60M) * QRACEL_MAX_PENDING_SLOTS);
+            if (locals.idx != QRACEL_NO_ROUND && locals.idx < state.get().roundCount)
+                output.pendingRound60m = state.get().rounds.get(locals.idx).roundId;
+        }
+        if (state.get().pendingCounts.get(durationToIndex(QRACEL_DURATION_6H)) > 0)
+        {
+            locals.idx = state.get().pendingRounds.get(durationToIndex(QRACEL_DURATION_6H) * QRACEL_MAX_PENDING_SLOTS);
+            if (locals.idx != QRACEL_NO_ROUND && locals.idx < state.get().roundCount)
+                output.pendingRound6h = state.get().rounds.get(locals.idx).roundId;
+        }
+        if (state.get().pendingCounts.get(durationToIndex(QRACEL_DURATION_24H)) > 0)
+        {
+            locals.idx = state.get().pendingRounds.get(durationToIndex(QRACEL_DURATION_24H) * QRACEL_MAX_PENDING_SLOTS);
+            if (locals.idx != QRACEL_NO_ROUND && locals.idx < state.get().roundCount)
+                output.pendingRound24h = state.get().rounds.get(locals.idx).roundId;
+        }
+        if (state.get().pendingCounts.get(durationToIndex(QRACEL_DURATION_1M)) > 0)
+        {
+            locals.idx = state.get().pendingRounds.get(durationToIndex(QRACEL_DURATION_1M) * QRACEL_MAX_PENDING_SLOTS);
+            if (locals.idx != QRACEL_NO_ROUND && locals.idx < state.get().roundCount)
+                output.pendingRound1m = state.get().rounds.get(locals.idx).roundId;
+        }
     }
 
     PUBLIC_FUNCTION_WITH_LOCALS(GetActiveRound)
@@ -910,6 +1089,10 @@ struct QRACEL : public ContractBase
         output.found = 0;
         output.durationType = input.durationType;
         output.status = 0;
+        output.startHour = 0;
+        output.startMinute = 0;
+        output.endHour = 0;
+        output.endMinute = 0;
         output.startTick = 0;
         output.endTick = 0;
         output.roundId = 0;
@@ -918,38 +1101,55 @@ struct QRACEL : public ContractBase
             return;
 
         locals.durationIndex = durationToIndex(input.durationType);
-        locals.roundIndex = state.activeRoundByDuration.get(locals.durationIndex);
-        if (locals.roundIndex == NULL_INDEX || locals.roundIndex >= state.roundCount)
+        locals.roundIndex = state.get().activeRoundByDuration.get(locals.durationIndex);
+        if (locals.roundIndex == QRACEL_NO_ROUND || locals.roundIndex >= state.get().roundCount)
             return;
 
-        locals.round = state.rounds.get(locals.roundIndex);
+        locals.round = state.get().rounds.get(locals.roundIndex);
         output.found = 1;
         output.durationType = locals.round.durationType;
         output.status = locals.round.status;
+        output.startHour = locals.round.startHour;
+        output.startMinute = locals.round.startMinute;
+        output.endHour = locals.round.endHour;
+        output.endMinute = locals.round.endMinute;
         output.startTick = locals.round.startTick;
         output.endTick = locals.round.endTick;
         output.roundId = locals.round.roundId;
     }
 
-    INITIALIZE()
+    INITIALIZE_WITH_LOCALS()
     {
-        state.admin = NULL_ID;
-        state.oracleId = OI::Price::getBinanceGateOracleId();
-        state.autoCreate = 1;
-        state._pad0 = 0;
-        state._pad1 = 0;
-        state._pad2 = 0;
-        state.roundCount = 0;
-        state.betCount = 0;
-        state.nextRoundId = 0;
-        state.totalVolume = 0;
-        state.totalPayouts = 0;
-        state.roundIdToIndex.reset();
-        state.oracleQueryContext.reset();
+        state.mut().admin = ID(
+            _Z, _P, _L, _F, _Z, _L, _F, _X, _C, _A, _X, _N, _Z, _F,
+            _T, _N, _P, _V, _W, _U, _I, _L, _A, _O, _N, _J, _N, _B,
+            _L, _D, _J, _D, _H, _O, _U, _I, _N, _K, _E, _Y, _X, _B,
+            _V, _I, _T, _A, _D, _M, _W, _G, _X, _H, _H, _Q, _E, _G
+        );
+        state.mut().oracleId = OI::Price::getBinanceOracleId();
+        state.mut().autoCreate = 0;
+        state.mut().lastQueryHour = 255;
+        state.mut().lastQueryMinute = 255;
+        state.mut().pendingPriceHour = 0;
+        state.mut().pendingPriceMinute = 0;
+        state.mut()._pad0 = 0;
+        state.mut()._pad1 = 0;
+        state.mut().roundCount = 0;
+        state.mut().betCount = 0;
+        state.mut().nextRoundId = 0;
+        state.mut().totalVolume = 0;
+        state.mut().totalPayouts = 0;
+        state.mut().pendingPriceQueryId = 0;
+        state.mut().roundIdToIndex.reset();
 
-        for (uint32 i = 0; i < QRACEL_DURATION_COUNT; ++i)
+        for (locals.i = 0; locals.i < QRACEL_DURATION_COUNT; ++locals.i)
         {
-            state.activeRoundByDuration.set(i, NULL_INDEX);
+            state.mut().activeRoundByDuration.set(locals.i, QRACEL_NO_ROUND);
+            state.mut().pendingCounts.set(locals.i, 0);
+        }
+        for (locals.i = 0; locals.i < QRACEL_TOTAL_PENDING_SLOTS; ++locals.i)
+        {
+            state.mut().pendingRounds.set(locals.i, QRACEL_NO_ROUND);
         }
     }
 
@@ -959,7 +1159,6 @@ struct QRACEL : public ContractBase
 
     END_EPOCH()
     {
-        state.oracleQueryContext.cleanupIfNeeded();
     }
 
     BEGIN_TICK()
@@ -968,29 +1167,61 @@ struct QRACEL : public ContractBase
 
     END_TICK_WITH_LOCALS()
     {
-        for (locals.i = 0; locals.i < QRACEL_DURATION_COUNT; ++locals.i)
+        // Phase 1: Fire shared oracle query if minute changed
+        if (state.get().pendingPriceQueryId == 0
+            && (qpi.minute() != state.get().lastQueryMinute || qpi.hour() != state.get().lastQueryHour))
         {
-            locals.durationType = locals.i + 1;
-            locals.durationIndex = locals.i;
-            locals.roundIndex = state.activeRoundByDuration.get(locals.durationIndex);
-
-            if (locals.roundIndex == NULL_INDEX)
+            setupBtcUsdtQuery(state.get().oracleId, qpi.now(), locals.query);
+            locals.queryId = QUERY_ORACLE(OI::Price, locals.query, NotifyPriceOracleReply, QRACEL_ORACLE_TIMEOUT_MS);
+            if (locals.queryId >= 0)
             {
-                if (!state.autoCreate)
-                    continue;
+                state.mut().pendingPriceQueryId = locals.queryId;
+                state.mut().pendingPriceHour = qpi.hour();
+                state.mut().pendingPriceMinute = qpi.minute();
+                state.mut().dbgLastQueryId = locals.queryId;
+            }
+        }
 
-                if (state.roundCount >= QRACEL_MAX_ROUNDS)
-                    continue;
+        // Phase 2: Fill pending rounds (up to 10 for 1m/10m, 1 for others)
+        for (locals.d = 0; locals.d < QRACEL_DURATION_COUNT; ++locals.d)
+        {
+            locals.durationType = locals.d + 1;
+            locals.durationIndex = locals.d;
 
-                locals.durationTicks = durationToTicks(locals.durationType);
-                if (locals.durationTicks == 0)
-                    continue;
+            if (!(state.get().autoCreate & (1 << locals.durationIndex)))
+                continue;
 
-                locals.roundIndex = state.roundCount;
-                locals.round.roundId = state.nextRoundId + 1;
-                locals.round.durationTicks = locals.durationTicks;
-                locals.round.startTick = qpi.tick();
-                locals.round.endTick = qpi.tick() + locals.durationTicks;
+            locals.maxPending = 1;
+            if (locals.durationType == QRACEL_DURATION_1M || locals.durationType == QRACEL_DURATION_10M)
+                locals.maxPending = QRACEL_MAX_PENDING_SLOTS;
+
+            locals.slotBase = locals.durationIndex * QRACEL_MAX_PENDING_SLOTS;
+
+            for (locals.p = 0; locals.p < locals.maxPending; ++locals.p)
+            {
+                if ((uint32)state.get().pendingCounts.get(locals.durationIndex) >= locals.maxPending)
+                    break;
+                if (state.get().roundCount >= QRACEL_MAX_ROUNDS)
+                    break;
+
+                // Compute next boundary
+                if (state.get().pendingCounts.get(locals.durationIndex) == 0)
+                {
+                    computeNextBoundary(locals.durationType, qpi.hour(), qpi.minute(), locals.nextH, locals.nextM);
+                }
+                else
+                {
+                    locals.roundIndex = state.get().pendingRounds.get(
+                        locals.slotBase + (uint32)state.get().pendingCounts.get(locals.durationIndex) - 1);
+                    locals.round = state.get().rounds.get(locals.roundIndex);
+                    computeNextBoundary(locals.durationType, locals.round.startHour, locals.round.startMinute, locals.nextH, locals.nextM);
+                }
+
+                // Create PENDING round
+                locals.roundIndex = state.get().roundCount;
+                locals.round.roundId = state.get().nextRoundId + 1;
+                locals.round.startTick = 0;
+                locals.round.endTick = 0;
                 locals.round.resolvedTick = 0;
                 locals.round.betCount = 0;
                 locals.round.upPool = 0;
@@ -1004,88 +1235,44 @@ struct QRACEL : public ContractBase
                 locals.round.endQueryId = 0;
                 locals.round.nextOracleRetryTick = 0;
                 locals.round.durationType = locals.durationType;
-                locals.round.status = QRACEL_ROUND_WAIT_START;
+                locals.round.status = QRACEL_ROUND_PENDING;
                 locals.round.winningSide = QRACEL_SIDE_NONE;
+                locals.round.startHour = locals.nextH;
+                locals.round.startMinute = locals.nextM;
+                computeRoundEndTime(locals.durationType, locals.nextH, locals.nextM, locals.round.endHour, locals.round.endMinute);
                 locals.round._pad0 = 0;
 
-                setupBtcUsdtQuery(state.oracleId, qpi.now(), locals.query);
-                locals.queryId = QUERY_ORACLE(OI::Price, locals.query, NotifyPriceOracleReply, QRACEL_ORACLE_TIMEOUT_MS);
-                if (locals.queryId < 0)
-                    continue;
-
-                locals.round.startQueryId = locals.queryId;
-                state.rounds.set(locals.roundIndex, locals.round);
-                state.roundIdToIndex.set(locals.round.roundId, locals.roundIndex);
-
-                locals.queryContext.roundIndex = locals.roundIndex;
-                locals.queryContext.phase = QRACEL_QUERY_PHASE_START;
-                locals.queryContext._pad0 = 0;
-                locals.queryContext._pad1 = 0;
-                state.oracleQueryContext.set((uint64)locals.queryId, locals.queryContext);
-
-                state.activeRoundByDuration.set(locals.durationIndex, locals.roundIndex);
-                state.roundCount = state.roundCount + 1;
-                state.nextRoundId = locals.round.roundId;
-                continue;
-            }
-
-            if (locals.roundIndex >= state.roundCount)
-            {
-                state.activeRoundByDuration.set(locals.durationIndex, NULL_INDEX);
-                continue;
-            }
-
-            locals.round = state.rounds.get(locals.roundIndex);
-
-            if (locals.round.status == QRACEL_ROUND_WAIT_START && locals.round.startQueryId == 0 && qpi.tick() >= locals.round.nextOracleRetryTick)
-            {
-                setupBtcUsdtQuery(state.oracleId, qpi.now(), locals.query);
-                locals.queryId = QUERY_ORACLE(OI::Price, locals.query, NotifyPriceOracleReply, QRACEL_ORACLE_TIMEOUT_MS);
-                if (locals.queryId < 0)
-                {
-                    locals.round.nextOracleRetryTick = qpi.tick() + QRACEL_ORACLE_RETRY_TICKS;
-                }
-                else
-                {
-                    locals.round.startQueryId = locals.queryId;
-                    locals.queryContext.roundIndex = locals.roundIndex;
-                    locals.queryContext.phase = QRACEL_QUERY_PHASE_START;
-                    locals.queryContext._pad0 = 0;
-                    locals.queryContext._pad1 = 0;
-                    state.oracleQueryContext.set((uint64)locals.queryId, locals.queryContext);
-                }
-
-                state.rounds.set(locals.roundIndex, locals.round);
-                continue;
-            }
-
-            if ((locals.round.status == QRACEL_ROUND_OPEN || locals.round.status == QRACEL_ROUND_WAIT_END)
-                && qpi.tick() >= locals.round.endTick
-                && locals.round.endQueryId == 0
-                && (locals.round.status != QRACEL_ROUND_WAIT_END || qpi.tick() >= locals.round.nextOracleRetryTick))
-            {
-                setupBtcUsdtQuery(state.oracleId, qpi.now(), locals.query);
-                locals.queryId = QUERY_ORACLE(OI::Price, locals.query, NotifyPriceOracleReply, QRACEL_ORACLE_TIMEOUT_MS);
-                if (locals.queryId < 0)
-                {
-                    locals.round.status = QRACEL_ROUND_WAIT_END;
-                    locals.round.nextOracleRetryTick = qpi.tick() + QRACEL_ORACLE_RETRY_TICKS;
-                }
-                else
-                {
-                    locals.round.status = QRACEL_ROUND_WAIT_END;
-                    locals.round.endQueryId = locals.queryId;
-                    locals.round.nextOracleRetryTick = 0;
-
-                    locals.queryContext.roundIndex = locals.roundIndex;
-                    locals.queryContext.phase = QRACEL_QUERY_PHASE_END;
-                    locals.queryContext._pad0 = 0;
-                    locals.queryContext._pad1 = 0;
-                    state.oracleQueryContext.set((uint64)locals.queryId, locals.queryContext);
-                }
-
-                state.rounds.set(locals.roundIndex, locals.round);
+                state.mut().rounds.set(locals.roundIndex, locals.round);
+                state.mut().roundIdToIndex.set(locals.round.roundId, locals.roundIndex);
+                state.mut().pendingRounds.set(
+                    locals.slotBase + (uint32)state.get().pendingCounts.get(locals.durationIndex),
+                    locals.roundIndex);
+                state.mut().pendingCounts.set(locals.durationIndex,
+                    state.get().pendingCounts.get(locals.durationIndex) + 1);
+                state.mut().roundCount = state.get().roundCount + 1;
+                state.mut().nextRoundId = locals.round.roundId;
+                state.mut().dbgEndTickAutoCreates = state.get().dbgEndTickAutoCreates + 1;
             }
         }
+    }
+
+    PRE_ACQUIRE_SHARES()
+    {
+    }
+
+    POST_ACQUIRE_SHARES()
+    {
+    }
+
+    PRE_RELEASE_SHARES()
+    {
+    }
+
+    POST_RELEASE_SHARES()
+    {
+    }
+
+    POST_INCOMING_TRANSFER()
+    {
     }
 };
