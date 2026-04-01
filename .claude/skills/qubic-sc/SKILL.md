@@ -1,7 +1,7 @@
 ---
 name: qubic-sc
 description: Expert assistant for developing Qubic Smart Contracts in restricted C++. Generates contract code, tests, and registration following all Qubic Core conventions.
-user_invocable: true
+user-invocable: true
 ---
 
 # Qubic Smart Contract Development Skill
