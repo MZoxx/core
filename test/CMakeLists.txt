@@ -31,6 +31,7 @@ add_executable(
   # common_def.cpp
   # contract_core.cpp
   # contract_qearn.cpp
+  # contract_qracel.cpp
   # contract_qvault.cpp
   # contract_qx.cpp
   # kangaroo_twelve.cpp
